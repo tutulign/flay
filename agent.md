@@ -639,3 +639,29 @@ Do not mark this block complete until the deployed Full access creation path no 
 ### Deployed verification status
 
 The implementation is committed as `aefe1e5` and Railway deployment `f53b7326-8b85-4919-b50e-0b40d56f9f76` is live. The focused delegation and signer tests pass, the full production build passes with 54 test files and 329 tests, the release audit passes, and production health reports `status: ok` with `privyAgentDelegation: true`. The served browser bundle contains the new bounded `Authorizing Full access` flow, and the deployment's verification window contains no application errors or HTTP responses at or above 400. The affected Privy wallet was confirmed as not delegated before deployment, so the final acceptance check must be triggered by its owner in the browser; this block remains open until that retry returns the one-time capability or exposes a new bounded error.
+
+## Active plan: x402 production DNS compatibility repair
+
+**Status:** in progress
+**Date:** 2026-10-13
+
+### Incident
+
+A newly issued Full access capability reached `flay_request_x402`, but the first request to the allowlisted live resource failed before payment with `X402_SERVICE_UNAVAILABLE`. The same HTTPS endpoint returns a valid x402 v2 HTTP 402 challenge through curl. A direct reproduction against `SafeX402HttpTransport` showed that current Node requests custom DNS lookups with `options.all: true`; Flay returned the legacy single-address callback shape, causing `ERR_INVALID_IP_ADDRESS` before TLS connected. No payment transaction was built, signed, or settled.
+
+### Implementation plan
+
+1. Update the pinned public-address lookup callback to honor both modern all-address and legacy single-address callback contracts while using only the already validated DNS answers.
+2. Preserve the SSRF boundary: reject the destination if any DNS result is non-public, do not perform a second system lookup, do not follow redirects, and keep the existing request/response limits.
+3. Add a regression test that invokes the captured lookup callback with `all: true` and verifies the validated address-array shape, plus the legacy single-address shape.
+4. Run the focused transport tests, complete `npm run check`, `npm run release:audit`, dependency/diff checks, and a live unsigned 402 transport probe.
+5. Compare this plan with the final code, record the audit, deploy to Railway, verify health, and retry the original MCP call with the same idempotency key so it cannot create a duplicate payment.
+
+### Acceptance criteria
+
+1. Flay reads the live resource's HTTP 402 challenge under the Node version used locally and on Railway.
+2. The lookup callback never supplies an invalid Node DNS result shape and never resolves or connects outside the validated public answer set.
+3. Existing x402 SSRF, redirect, size, payment, settlement, and authorization tests remain green.
+4. Production completes the single authorized $0.001 USDC request or returns a specific post-connect protocol/payment error with no duplicate settlement.
+
+Do not mark this repair complete until all four acceptance criteria are evidenced below.

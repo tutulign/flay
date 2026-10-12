@@ -110,7 +110,8 @@ export class SafeX402HttpTransport implements X402HttpTransport {
     if (!/^[0-9a-f-]{36}$/i.test(input.idempotencyKey)) throw new AppError(400, 'X402_IDEMPOTENCY_INVALID', 'The x402 idempotency key is invalid.');
     if (input.paymentSignature && input.paymentSignature.length > 32 * 1024) throw new AppError(400, 'X402_PAYMENT_HEADER_TOO_LARGE', 'The x402 payment header is too large.');
 
-    const [target] = await this.resolver(url.hostname);
+    const addresses = await this.resolver(url.hostname);
+    const target = addresses[0];
     const headers: Record<string, string> = {
       accept: 'application/json, text/plain;q=0.9',
       'user-agent': 'Flay-x402/1.0',
@@ -140,7 +141,11 @@ export class SafeX402HttpTransport implements X402HttpTransport {
         path: `${url.pathname}${url.search}`,
         headers,
         agent: false,
-        lookup: ((_hostname: string, _options: unknown, callback: (...args: unknown[]) => void) => {
+        lookup: ((_hostname: string, options: unknown, callback: (...args: unknown[]) => void) => {
+          if (typeof options === 'object' && options !== null && 'all' in options && options.all === true) {
+            callback(null, addresses.map(({ address, family }) => ({ address, family })));
+            return;
+          }
           callback(null, target.address, target.family);
         }) as https.RequestOptions['lookup'],
       }, (response) => {

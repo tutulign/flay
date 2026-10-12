@@ -93,4 +93,35 @@ describe('x402 HTTPS boundary', () => {
     expect(sentHeaders).not.toHaveProperty('authorization');
     expect(sentHeaders).not.toHaveProperty('cookie');
   });
+
+  it('returns pinned DNS answers in the shape requested by current and legacy Node clients', async () => {
+    const request = scriptedTransport(402, { 'content-type': 'application/json' }, '{}');
+    await expect(request.transport.request({
+      url: 'https://api.example.com/report', method: 'GET',
+      idempotencyKey: crypto.randomUUID(),
+    })).resolves.toMatchObject({ status: 402 });
+
+    const pinnedLookup = request.options()?.lookup as unknown as (
+      hostname: string,
+      options: unknown,
+      callback: (...args: unknown[]) => void,
+    ) => void;
+    expect(pinnedLookup).toBeTypeOf('function');
+
+    const allResult = await new Promise<unknown[]>((resolve, reject) => {
+      pinnedLookup('api.example.com', { all: true }, (error, addresses) => {
+        if (error) reject(error);
+        else resolve(addresses as unknown[]);
+      });
+    });
+    expect(allResult).toEqual([{ address: '8.8.8.8', family: 4 }]);
+
+    const singleResult = await new Promise<{ address: unknown; family: unknown }>((resolve, reject) => {
+      pinnedLookup('api.example.com', {}, (error, address, family) => {
+        if (error) reject(error);
+        else resolve({ address, family });
+      });
+    });
+    expect(singleResult).toEqual({ address: '8.8.8.8', family: 4 });
+  });
 });
