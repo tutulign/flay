@@ -1,5 +1,40 @@
+import { EventEmitter } from 'node:events';
+import https from 'node:https';
+import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { isPublicX402Address, resolvePublicX402Addresses, validateX402Target } from './x402-http.js';
+import { isPublicX402Address, resolvePublicX402Addresses, SafeX402HttpTransport, validateX402Target } from './x402-http.js';
+
+function scriptedTransport(status: number, responseHeaders: Record<string, string>, body: string | Buffer) {
+  let capturedOptions: https.RequestOptions | null = null;
+  const requester = ((options: https.RequestOptions, callback: (response: PassThrough & { statusCode: number; headers: Record<string, string> }) => void) => {
+    capturedOptions = options;
+    const request = new EventEmitter() as EventEmitter & {
+      setTimeout(ms: number, handler: () => void): unknown;
+      destroy(error?: Error): unknown;
+      write(chunk: string): boolean;
+      end(): void;
+    };
+    request.setTimeout = () => request;
+    request.destroy = (error?: Error) => {
+      if (error) queueMicrotask(() => request.emit('error', error));
+      return request;
+    };
+    request.write = () => true;
+    request.end = () => {
+      const response = new PassThrough() as PassThrough & { statusCode: number; headers: Record<string, string> };
+      response.statusCode = status;
+      response.headers = responseHeaders;
+      callback(response);
+      response.end(body);
+    };
+    return request;
+  }) as unknown as typeof https.request;
+  const transport = new SafeX402HttpTransport(
+    async () => [{ address: '8.8.8.8', family: 4 }],
+    requester,
+  );
+  return { transport, options: () => capturedOptions };
+}
 
 describe('x402 HTTPS boundary', () => {
   it('accepts public addresses and rejects local, private, metadata, reserved, and documentation ranges', () => {
@@ -39,5 +74,23 @@ describe('x402 HTTPS boundary', () => {
     await expect(resolvePublicX402Addresses('api.example.com', async () => {
       throw new Error('resolver failed');
     })).rejects.toMatchObject({ code: 'X402_DNS_UNAVAILABLE', retryable: true });
+  });
+
+  it('rejects redirects and oversized responses without forwarding ambient credentials', async () => {
+    const input = {
+      url: 'https://api.example.com/report', method: 'GET' as const,
+      idempotencyKey: crypto.randomUUID(), paymentSignature: 'x402-payment',
+    };
+    const redirect = scriptedTransport(302, { location: 'https://other.example/report' }, 'redirect');
+    await expect(redirect.transport.request(input)).rejects.toMatchObject({ code: 'X402_REDIRECT_DENIED' });
+
+    const oversized = scriptedTransport(200, { 'content-type': 'text/plain' }, Buffer.alloc(64 * 1024 + 1));
+    await expect(oversized.transport.request(input)).rejects.toMatchObject({ code: 'X402_RESPONSE_TOO_LARGE' });
+
+    const sentHeaders = redirect.options()?.headers as Record<string, string>;
+    expect(sentHeaders['payment-signature']).toBe('x402-payment');
+    expect(sentHeaders['idempotency-key']).toBe(input.idempotencyKey);
+    expect(sentHeaders).not.toHaveProperty('authorization');
+    expect(sentHeaders).not.toHaveProperty('cookie');
   });
 });

@@ -254,4 +254,46 @@ describe('Agent x402 exact-SVM payments', () => {
     await expect(service.execute(prepared.preparedId, wallet.publicKey.toBase58(), signPrepared(prepared.transaction, wallet)))
       .rejects.toMatchObject({ code: 'X402_SETTLEMENT_RECEIPT_MISSING' });
   });
+
+  it('fails closed on failed settlements and unsafe or malformed paid responses', async () => {
+    const wallet = Keypair.generate();
+    const feePayer = Keypair.generate().publicKey;
+    const payTo = Keypair.generate().publicKey;
+    const settlementSignature = signature();
+    const successHeader = encodePaymentResponseHeader({
+      success: true, payer: wallet.publicKey.toBase58(), transaction: settlementSignature,
+      network: X402_SOLANA_MAINNET, amount: '1',
+    });
+    const cases = [
+      {
+        code: 'X402_SETTLEMENT_FAILED',
+        paid: response(200, {
+          'payment-response': encodePaymentResponseHeader({
+            success: false, transaction: '', network: X402_SOLANA_MAINNET, errorReason: 'settlement_failed',
+          }),
+          'content-type': 'application/json',
+        }, '{"mustNotEscape":true}'),
+      },
+      {
+        code: 'X402_RESPONSE_TYPE_DENIED',
+        paid: response(200, { 'payment-response': successHeader, 'content-type': 'application/octet-stream' }, 'binary'),
+      },
+      {
+        code: 'X402_RESPONSE_JSON_INVALID',
+        paid: response(200, { 'payment-response': successHeader, 'content-type': 'application/json' }, '{broken'),
+      },
+    ];
+    for (const item of cases) {
+      const transport = new ScriptedTransport([
+        response(402, { 'payment-required': encodePaymentRequiredHeader(challenge(feePayer.toBase58(), payTo.toBase58())) }),
+        item.paid,
+      ]);
+      const service = new AgentX402Service(transport, 'https://rpc.invalid', transactionBuilder(wallet, feePayer));
+      const prepared = await service.prepare(wallet.publicKey.toBase58(), {
+        kind: 'x402', url: 'https://paid.example/report', method: 'GET', maxPaymentAtomic: '10',
+      }, randomUUID(), '10');
+      await expect(service.execute(prepared.preparedId, wallet.publicKey.toBase58(), signPrepared(prepared.transaction, wallet)))
+        .rejects.toMatchObject({ code: item.code });
+    }
+  });
 });

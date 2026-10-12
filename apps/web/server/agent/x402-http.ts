@@ -33,6 +33,8 @@ export interface ResolvedAddress {
   family: 4 | 6;
 }
 
+type X402AddressResolver = (hostname: string) => Promise<ResolvedAddress[]>;
+
 export function isPublicX402Address(value: string): boolean {
   try {
     const parsed = ipaddr.parse(value.split('%')[0]);
@@ -95,6 +97,11 @@ function normalizedHeaders(headers: IncomingHttpHeaders): ReadonlyMap<string, st
 }
 
 export class SafeX402HttpTransport implements X402HttpTransport {
+  constructor(
+    private readonly resolver: X402AddressResolver = resolvePublicX402Addresses,
+    private readonly requester: typeof https.request = https.request,
+  ) {}
+
   async request(input: X402HttpRequest): Promise<X402HttpResponse> {
     const url = validateX402Target(input.url);
     const body = input.body ?? '';
@@ -103,7 +110,7 @@ export class SafeX402HttpTransport implements X402HttpTransport {
     if (!/^[0-9a-f-]{36}$/i.test(input.idempotencyKey)) throw new AppError(400, 'X402_IDEMPOTENCY_INVALID', 'The x402 idempotency key is invalid.');
     if (input.paymentSignature && input.paymentSignature.length > 32 * 1024) throw new AppError(400, 'X402_PAYMENT_HEADER_TOO_LARGE', 'The x402 payment header is too large.');
 
-    const [target] = await resolvePublicX402Addresses(url.hostname);
+    const [target] = await this.resolver(url.hostname);
     const headers: Record<string, string> = {
       accept: 'application/json, text/plain;q=0.9',
       'user-agent': 'Flay-x402/1.0',
@@ -124,7 +131,7 @@ export class SafeX402HttpTransport implements X402HttpTransport {
         if (error instanceof AppError) reject(error);
         else reject(new AppError(502, 'X402_SERVICE_UNAVAILABLE', 'The x402 service could not be reached.', true));
       };
-      const request = https.request({
+      const request = this.requester({
         protocol: 'https:',
         hostname: url.hostname,
         port: 443,
