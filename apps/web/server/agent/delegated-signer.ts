@@ -14,23 +14,26 @@ export interface AgentDelegatedSigner {
 export class PrivyAgentDelegatedSigner implements AgentDelegatedSigner {
   private readonly client: PrivyClient | null;
   private readonly authorizationPrivateKey: string | null;
+  private readonly authorizationKeyId: string | null;
   private readonly requestTimeoutMs: number;
 
-  constructor(input: { appId?: string; appSecret?: string; authorizationPrivateKey?: string; requestTimeoutMs?: number } = {
+  constructor(input: { appId?: string; appSecret?: string; authorizationPrivateKey?: string; authorizationKeyId?: string; requestTimeoutMs?: number } = {
     appId: config.privyAppId,
     appSecret: config.privyAppSecret,
     authorizationPrivateKey: config.privyAuthorizationPrivateKey,
+    authorizationKeyId: config.privyAuthorizationKeyId,
     requestTimeoutMs: config.privyAgentTimeoutMs,
   }) {
     this.authorizationPrivateKey = input.authorizationPrivateKey ?? null;
+    this.authorizationKeyId = input.authorizationKeyId ?? null;
     this.requestTimeoutMs = input.requestTimeoutMs ?? config.privyAgentTimeoutMs;
-    this.client = input.appId && input.appSecret && input.authorizationPrivateKey
+    this.client = input.appId && input.appSecret && input.authorizationPrivateKey && input.authorizationKeyId
       ? new PrivyClient({ appId: input.appId, appSecret: input.appSecret })
       : null;
   }
 
   available(): boolean {
-    return Boolean(this.client && this.authorizationPrivateKey);
+    return Boolean(this.client && this.authorizationPrivateKey && this.authorizationKeyId);
   }
 
   async resolveWalletId(userId: string, wallet: string): Promise<string> {
@@ -53,7 +56,8 @@ export class PrivyAgentDelegatedSigner implements AgentDelegatedSigner {
       if (!account || !('delegated' in account) || account.delegated !== true || !('id' in account) || typeof account.id !== 'string') {
         throw new AppError(409, 'AGENT_WALLET_NOT_DELEGATED', 'Approve the one-time Privy wallet delegation before creating automatic agent access.');
       }
-      await this.assertWallet(account.id, wallet);
+      const teeWallet = 'recovery_method' in account && account.recovery_method === 'privy-v2';
+      await this.assertWallet(account.id, wallet, teeWallet);
       return account.id;
     } catch (error) {
       if (error instanceof AppError) throw error;
@@ -109,13 +113,13 @@ export class PrivyAgentDelegatedSigner implements AgentDelegatedSigner {
   }
 
   private requireClient(): PrivyClient {
-    if (!this.client || !this.authorizationPrivateKey) {
+    if (!this.client || !this.authorizationPrivateKey || !this.authorizationKeyId) {
       throw new AppError(503, 'AGENT_AUTOMATIC_NOT_CONFIGURED', 'Automatic agent execution is not configured on this Flay deployment. Use Always ask for now.');
     }
     return this.client;
   }
 
-  private async assertWallet(walletId: string, expectedAddress: string): Promise<void> {
+  private async assertWallet(walletId: string, expectedAddress: string, requireExactSigner = false): Promise<void> {
     const client = this.requireClient();
     try {
       const wallet = await this.withTimeout(
@@ -125,6 +129,9 @@ export class PrivyAgentDelegatedSigner implements AgentDelegatedSigner {
       );
       if (wallet.chain_type !== 'solana' || wallet.address !== expectedAddress) {
         throw new AppError(403, 'AGENT_DELEGATED_WALLET_MISMATCH', 'The delegated Privy wallet does not match this Agent capability.');
+      }
+      if (requireExactSigner && !wallet.additional_signers?.some((signer) => signer.signer_id === this.authorizationKeyId)) {
+        throw new AppError(409, 'AGENT_WALLET_NOT_DELEGATED', 'Approve the one-time Privy wallet delegation before creating automatic agent access.');
       }
     } catch (error) {
       if (error instanceof AppError) throw error;

@@ -41,6 +41,7 @@ export const config = {
   privyVerificationKey: clean(process.env.PRIVY_VERIFICATION_KEY)?.replace(/\\n/g, '\n'),
   privyAppSecret: clean(process.env.PRIVY_APP_SECRET),
   privyAuthorizationPrivateKey: clean(process.env.PRIVY_AUTHORIZATION_PRIVATE_KEY),
+  privyAuthorizationKeyId: clean(process.env.PRIVY_AUTHORIZATION_KEY_ID) ?? clean(process.env.VITE_PRIVY_AUTHORIZATION_KEY_ID),
   privyAgentTimeoutMs: boundedInteger(process.env.PRIVY_AGENT_TIMEOUT_MS, 15_000, 1_000, 60_000),
   privyFiatOnrampEnvironment: privyFiatOnrampEnvironment as 'sandbox' | 'production',
   jupiterApiKey: clean(process.env.JUPITER_API_KEY),
@@ -86,7 +87,7 @@ export function providerHeaders(includeJson = false): HeadersInit {
 export function serverReadiness() {
   return {
     privy: Boolean(config.privyAppId && config.privyVerificationKey),
-    privyAgentDelegation: Boolean(config.privyAppId && config.privyAppSecret && config.privyAuthorizationPrivateKey),
+    privyAgentDelegation: Boolean(config.privyAppId && config.privyAppSecret && config.privyAuthorizationPrivateKey && config.privyAuthorizationKeyId),
     jupiterSwap: true,
     // Trigger V1 currently accepts keyless requests; an API key only raises capacity.
     jupiterTrigger: true,

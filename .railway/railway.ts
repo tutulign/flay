@@ -22,6 +22,7 @@ export default defineRailway(() => {
       SOLANA_RPC_URL: preserve(),
       SOLANA_RPC_WS_URL: preserve(),
       VITE_PRIVY_APP_ID: preserve(),
+      VITE_PRIVY_AUTHORIZATION_KEY_ID: preserve(),
       VITE_PRIVY_ONRAMP_ENV: preserve(),
     },
   });

@@ -27,24 +27,27 @@ beforeEach(() => {
   mocks.getUser.mockResolvedValue({
     linked_accounts: [{
       type: 'wallet', chain_type: 'solana', connector_type: 'embedded', wallet_client_type: 'privy',
-      address: SOL_MINT, delegated: true, id: 'wallet-id',
+      address: SOL_MINT, delegated: true, id: 'wallet-id', recovery_method: 'privy-v2',
     }],
   });
-  mocks.getWallet.mockResolvedValue({ id: 'wallet-id', address: SOL_MINT, chain_type: 'solana' });
+  mocks.getWallet.mockResolvedValue({
+    id: 'wallet-id', address: SOL_MINT, chain_type: 'solana',
+    additional_signers: [{ signer_id: 'signer-id', override_policy_ids: [] }],
+  });
   mocks.signTransaction.mockResolvedValue({ signed_transaction: 'signed-base64' });
   mocks.signAndSendTransaction.mockResolvedValue({ hash: 'base58-signature' });
 });
 
 describe('Privy delegated Agent signer', () => {
   it('resolves only the authenticated user’s delegated embedded Solana wallet', async () => {
-    const signer = new PrivyAgentDelegatedSigner({ appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key' });
+    const signer = new PrivyAgentDelegatedSigner({ appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key', authorizationKeyId: 'signer-id' });
     await expect(signer.resolveWalletId('did:privy:user', SOL_MINT)).resolves.toBe('wallet-id');
     expect(mocks.getUser).toHaveBeenCalledWith('did:privy:user');
     expect(mocks.getWallet).toHaveBeenCalledWith('wallet-id');
   });
 
   it('fails closed when the exact embedded Solana wallet is not delegated', async () => {
-    const signer = new PrivyAgentDelegatedSigner({ appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key' });
+    const signer = new PrivyAgentDelegatedSigner({ appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key', authorizationKeyId: 'signer-id' });
     mocks.getUser.mockResolvedValueOnce({
       linked_accounts: [{
         type: 'wallet', chain_type: 'solana', connector_type: 'embedded', wallet_client_type: 'privy',
@@ -57,15 +60,15 @@ describe('Privy delegated Agent signer', () => {
   });
 
   it('checks wallet ID, address, and chain before every signing operation', async () => {
-    const signer = new PrivyAgentDelegatedSigner({ appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key' });
-    mocks.getWallet.mockResolvedValueOnce({ id: 'wallet-id', address: USDC_MINT, chain_type: 'solana' });
+    const signer = new PrivyAgentDelegatedSigner({ appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key', authorizationKeyId: 'signer-id' });
+    mocks.getWallet.mockResolvedValueOnce({ id: 'wallet-id', address: USDC_MINT, chain_type: 'solana', additional_signers: [] });
     await expect(signer.signTransaction('wallet-id', SOL_MINT, 'transaction', 'request-id'))
       .rejects.toMatchObject({ code: 'AGENT_DELEGATED_WALLET_MISMATCH' });
     expect(mocks.signTransaction).not.toHaveBeenCalled();
   });
 
   it('passes the server authorization key internally and returns only provider results', async () => {
-    const signer = new PrivyAgentDelegatedSigner({ appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key' });
+    const signer = new PrivyAgentDelegatedSigner({ appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key', authorizationKeyId: 'signer-id' });
     await expect(signer.signTransaction('wallet-id', SOL_MINT, 'transaction', 'request-id')).resolves.toBe('signed-base64');
     expect(mocks.signTransaction).toHaveBeenCalledWith('wallet-id', expect.objectContaining({
       transaction: 'transaction', idempotency_key: 'request-id',
@@ -77,12 +80,43 @@ describe('Privy delegated Agent signer', () => {
 
   it('is unavailable without every server-only setting', () => {
     expect(new PrivyAgentDelegatedSigner({ appId: 'app', appSecret: 'secret' }).available()).toBe(false);
+    expect(new PrivyAgentDelegatedSigner({
+      appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key',
+    }).available()).toBe(false);
+  });
+
+  it('rejects a TEE wallet delegated to a different authorization key', async () => {
+    const signer = new PrivyAgentDelegatedSigner({
+      appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key', authorizationKeyId: 'signer-id',
+    });
+    mocks.getWallet.mockResolvedValueOnce({
+      id: 'wallet-id', address: SOL_MINT, chain_type: 'solana',
+      additional_signers: [{ signer_id: 'another-signer', override_policy_ids: [] }],
+    });
+    await expect(signer.resolveWalletId('did:privy:user', SOL_MINT))
+      .rejects.toMatchObject({ code: 'AGENT_WALLET_NOT_DELEGATED' });
+  });
+
+  it('retains legacy delegated-wallet verification for on-device wallets', async () => {
+    const signer = new PrivyAgentDelegatedSigner({
+      appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key', authorizationKeyId: 'signer-id',
+    });
+    mocks.getUser.mockResolvedValueOnce({
+      linked_accounts: [{
+        type: 'wallet', chain_type: 'solana', connector_type: 'embedded', wallet_client_type: 'privy',
+        address: SOL_MINT, delegated: true, id: 'legacy-wallet-id', recovery_method: 'google-drive',
+      }],
+    });
+    mocks.getWallet.mockResolvedValueOnce({
+      id: 'legacy-wallet-id', address: SOL_MINT, chain_type: 'solana', additional_signers: [],
+    });
+    await expect(signer.resolveWalletId('did:privy:user', SOL_MINT)).resolves.toBe('legacy-wallet-id');
   });
 
   it('bounds a stalled Privy delegation lookup with a retryable error', async () => {
     mocks.getUser.mockReturnValueOnce(new Promise(() => undefined));
     const signer = new PrivyAgentDelegatedSigner({
-      appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key', requestTimeoutMs: 5,
+      appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key', authorizationKeyId: 'signer-id', requestTimeoutMs: 5,
     });
     await expect(signer.resolveWalletId('did:privy:user', SOL_MINT)).rejects.toMatchObject({
       code: 'AGENT_DELEGATION_LOOKUP_TIMEOUT', status: 504, retryable: true,

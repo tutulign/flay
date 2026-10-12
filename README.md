@@ -202,6 +202,7 @@ Copy [`apps/web/.env.example`](apps/web/.env.example) to `apps/web/.env`. The re
 | `PRIVY_VERIFICATION_KEY` | Yes | Server-only Privy identity-token verification key |
 | `PRIVY_APP_SECRET` | Automatic agents only | Server-only Privy application secret used to resolve delegated wallets |
 | `PRIVY_AUTHORIZATION_PRIVATE_KEY` | Automatic agents only | Base64 PKCS8 P-256 private authorization key; never use a wallet private key or a `VITE_` variable |
+| `VITE_PRIVY_AUTHORIZATION_KEY_ID` | Automatic agents only | Public Privy authorization-key ID added as a signer to TEE wallets; this is an identifier, not the private key |
 | `PRIVY_AGENT_TIMEOUT_MS` | No | Maximum wait for each server-side Privy Agent operation; defaults to 15 seconds |
 | `SOLANA_RPC_URL` | Yes | Primary Solana mainnet RPC |
 | `SOLANA_FALLBACK_RPC_URL` | No | Optional independent RPC fallback |
@@ -223,7 +224,7 @@ In the Privy dashboard:
 3. Enable embedded Solana wallets, user-owned wallet export, and identity tokens.
 4. Enable Card Onramps for production funding.
 5. Configure Solana mainnet fee sponsorship and billing before testing Privy-sponsored actions.
-6. To enable automatic agents, enable server-side wallet access/delegated actions, require signed wallet API requests, register the matching P-256 authorization public key, and set the app secret plus authorization private key only in the server environment.
+6. To enable automatic agents, enable server-side wallet access/signers, register the P-256 authorization key, set its public key ID for the browser signer-consent flow, and keep the app secret plus authorization private key only in the server environment.
 
 Gas sponsorship is dynamic. Flay labels an action sponsored only after validating the exact prepared transaction and its non-user fee payer. Native SOL wrapping, missing token accounts, venue setup rent, limit orders, and futures actions can still require wallet SOL.
 

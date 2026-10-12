@@ -1,21 +1,16 @@
-export const AGENT_DELEGATION_WAIT_MS = 15_000;
-
-export type AgentDelegationOutcome = 'completed' | 'verification-needed';
+export const AGENT_DELEGATION_WAIT_MS = 45_000;
 
 export async function waitForAgentDelegation(
   delegation: Promise<void>,
   timeoutMs = AGENT_DELEGATION_WAIT_MS,
-): Promise<AgentDelegationOutcome> {
+): Promise<void> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<AgentDelegationOutcome>((resolve) => {
-    timeout = setTimeout(() => resolve('verification-needed'), timeoutMs);
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error('Privy did not finish granting Full access. Retry and keep this page open until authorization completes.')), timeoutMs);
   });
 
   try {
-    return await Promise.race([
-      delegation.then(() => 'completed' as const),
-      deadline,
-    ]);
+    await Promise.race([delegation, deadline]);
   } finally {
     if (timeout) clearTimeout(timeout);
   }

@@ -1,4 +1,4 @@
-import { PrivyProvider, useFiatOnramp, useHeadlessDelegatedActions, useIdentityToken, usePrivy } from '@privy-io/react-auth';
+import { PrivyProvider, useFiatOnramp, useHeadlessDelegatedActions, useIdentityToken, usePrivy, useSigners } from '@privy-io/react-auth';
 import {
   useExportWallet,
   useFundWallet,
@@ -11,10 +11,12 @@ import { useMemo } from 'react';
 import App from './App';
 import type { FlayAuth } from './auth';
 import PrivyOnrampCheckoutPage from './fiat/PrivyOnrampCheckoutPage';
+import { delegateAgentWallet, revokeAgentWallet } from './privy-agent-delegation';
 import { PRIVY_SPONSORED_SEND_CHAIN, PRIVY_SPONSORED_SEND_OPTIONS, privySponsoredMarketOptions, requirePrivySolanaSignature } from './privy-sponsored-send';
 import { buildPrivyOnrampOptions, buildPrivyRegionalMoonPayRequest, parsePrivyOnrampCheckoutIntent, resolvePrivyOnrampEnvironment, resolvePrivyOnrampRoute } from './privy-fiat-onramp';
 
 const fiatOnrampEnvironment = resolvePrivyOnrampEnvironment(import.meta.env.VITE_PRIVY_ONRAMP_ENV);
+const privyAuthorizationKeyId = import.meta.env.VITE_PRIVY_AUTHORIZATION_KEY_ID?.trim() || null;
 
 export function ConfiguredPrivyApp({ appId }: { appId: string }) {
   return (
@@ -56,6 +58,7 @@ function PrivyBridge() {
   const { fund } = useFiatOnramp();
   const { fundWallet } = useFundWallet();
   const { delegateWallet, revokeWallets } = useHeadlessDelegatedActions();
+  const { addSigners, removeSigners } = useSigners();
 
   const embeddedAccount = user?.linkedAccounts.find((account) => (
     account.type === 'wallet'
@@ -64,6 +67,7 @@ function PrivyBridge() {
     && account.connectorType === 'embedded'
   ));
   const embeddedAddress = embeddedAccount && 'address' in embeddedAccount ? embeddedAccount.address : null;
+  const teeWallet = Boolean(embeddedAccount && 'id' in embeddedAccount && typeof embeddedAccount.id === 'string');
   const wallet = wallets.find((candidate) => candidate.address === embeddedAddress);
 
   const auth = useMemo<FlayAuth>(() => ({
@@ -84,10 +88,18 @@ function PrivyBridge() {
     delegateWalletForAgent: async () => {
       const address = wallet?.address ?? embeddedAddress;
       if (!address) throw new Error('Your embedded Solana wallet is still loading.');
-      await delegateWallet({ address, chainType: 'solana' });
+      await delegateAgentWallet({
+        address,
+        teeWallet,
+        authorizationKeyId: privyAuthorizationKeyId,
+        addSigners,
+        delegateLegacy: delegateWallet,
+      });
     },
     revokeAgentWalletDelegation: async () => {
-      await revokeWallets();
+      const address = wallet?.address ?? embeddedAddress;
+      if (!address) throw new Error('Your embedded Solana wallet is still loading.');
+      await revokeAgentWallet({ address, teeWallet, removeSigners, revokeLegacy: revokeWallets });
     },
     signMessage: async (message: Uint8Array) => {
       if (!wallet) throw new Error('Your embedded Solana wallet is still loading.');
@@ -146,6 +158,7 @@ function PrivyBridge() {
     },
   }), [
     authenticated,
+    addSigners,
     embeddedAddress,
     delegateWallet,
     exportWallet,
@@ -157,11 +170,13 @@ function PrivyBridge() {
     logout,
     ready,
     revokeWallets,
+    removeSigners,
     signMessage,
     signAndSendTransaction,
     signTransaction,
     wallet,
     walletsReady,
+    teeWallet,
   ]);
 
   return checkoutIntent

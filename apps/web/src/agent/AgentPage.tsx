@@ -31,7 +31,7 @@ import type {
 } from '../../shared/agent';
 import { CORE_TOKEN_MINTS } from '../../shared/constants';
 import type { FlayAuth } from '../auth';
-import { api, ApiClientError, fromBase64, query, readableError, toBase64 } from '../lib/api';
+import { api, fromBase64, query, readableError, toBase64 } from '../lib/api';
 import { waitForAgentDelegation } from './delegation';
 import './agent.css';
 
@@ -181,7 +181,6 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
     if (!auth.authenticated) { auth.login(); return; }
     if (!auth.walletAddress || !auth.identityToken) { setError('Your Privy wallet is still loading.'); return; }
     const needsDelegation = form.approvalMode === 'automatic' && !auth.walletDelegated;
-    let delegationNeedsVerification = false;
     setBusy(needsDelegation ? 'delegate' : 'create'); setError(null); setCreated(null);
     try {
       if (form.approvalMode === 'automatic') {
@@ -189,7 +188,7 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
           throw new Error('Automatic execution is not configured on this Flay deployment. Choose Always ask.');
         }
         if (needsDelegation) {
-          delegationNeedsVerification = await waitForAgentDelegation(auth.delegateWalletForAgent()) === 'verification-needed';
+          await waitForAgentDelegation(auth.delegateWalletForAgent());
           setBusy('create');
         }
       }
@@ -213,11 +212,7 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
       });
       setCreated(result); setCopied(false); await load(true);
     } catch (caught) {
-      if (delegationNeedsVerification && caught instanceof ApiClientError && caught.code === 'AGENT_WALLET_NOT_DELEGATED') {
-        setError('Privy did not finish granting Full access. Retry once; Flay will never create the credential until Privy confirms this wallet delegation.');
-      } else {
-        setError(errorMessage(caught));
-      }
+      setError(errorMessage(caught));
     } finally {
       setBusy(null);
     }
