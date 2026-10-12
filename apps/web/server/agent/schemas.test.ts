@@ -79,4 +79,66 @@ describe('agent request contracts', () => {
     });
     expect(parsed.success).toBe(false);
   });
+
+  it('normalizes a bounded x402 policy while preserving safe defaults for older policies', () => {
+    const base = {
+      wallet,
+      name: 'API agent',
+      products: ['convert'],
+      maxTransactionUsd: 25,
+      maxDailyUsd: 100,
+      maxSlippageBps: 50,
+      maxFuturesLeverage: 3,
+      maxOpenFuturesPositions: 2,
+      allowedTokenMints: [SOL_MINT, USDC_MINT],
+      allowedStockSymbols: [],
+      allowedFuturesMarkets: [],
+      expiresInHours: 24,
+    };
+    const legacy = agentPolicySchema.parse(base);
+    expect(legacy).toMatchObject({ x402AllowedOrigins: [], x402AllowedMethods: ['GET'], maxX402PaymentAtomic: '10000', maxX402DailyAtomic: '1000000' });
+
+    const paid = agentPolicySchema.parse({
+      ...base,
+      products: ['x402'],
+      allowedTokenMints: [],
+      x402AllowedOrigins: ['https://PAID.example/', 'https://paid.example'],
+      x402AllowedMethods: ['GET', 'POST'],
+      maxX402PaymentAtomic: '1',
+      maxX402DailyAtomic: '2',
+    });
+    expect(paid.x402AllowedOrigins).toEqual(['https://paid.example']);
+    expect(paid.maxX402PaymentAtomic).toBe('1');
+  });
+
+  it('rejects x402 without an origin, unsafe URLs, GET bodies, and oversized POST bodies', () => {
+    const base = {
+      wallet,
+      name: 'API agent',
+      products: ['x402'],
+      maxTransactionUsd: 25,
+      maxDailyUsd: 100,
+      maxSlippageBps: 50,
+      maxFuturesLeverage: 3,
+      maxOpenFuturesPositions: 2,
+      allowedTokenMints: [],
+      allowedStockSymbols: [],
+      allowedFuturesMarkets: [],
+      expiresInHours: 24,
+    };
+    expect(agentPolicySchema.safeParse(base).success).toBe(false);
+    expect(agentPolicySchema.safeParse({ ...base, x402AllowedOrigins: ['http://paid.example'] }).success).toBe(false);
+    expect(agentIntentSubmissionSchema.safeParse({
+      idempotencyKey: crypto.randomUUID(),
+      intent: { kind: 'x402', url: 'https://paid.example/report', method: 'GET', body: { query: 'SOL' }, maxPaymentAtomic: '1' },
+    }).success).toBe(false);
+    expect(agentIntentSubmissionSchema.safeParse({
+      idempotencyKey: crypto.randomUUID(),
+      intent: { kind: 'x402', url: 'https://paid.example/report', method: 'POST', body: { query: 'x'.repeat(8 * 1024) }, maxPaymentAtomic: '1' },
+    }).success).toBe(false);
+    expect(agentIntentSubmissionSchema.safeParse({
+      idempotencyKey: crypto.randomUUID(),
+      intent: { kind: 'x402', url: 'https://user:secret@paid.example/report', method: 'POST', maxPaymentAtomic: '1' },
+    }).success).toBe(false);
+  });
 });

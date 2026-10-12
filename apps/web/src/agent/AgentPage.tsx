@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import bs58 from 'bs58';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { atomicToDecimal } from '../../shared/amounts';
+import { atomicToDecimal, decimalToAtomic } from '../../shared/amounts';
 import type {
   AgentCredentialCreated,
   AgentCredentialSummary,
@@ -56,6 +56,10 @@ interface PolicyForm {
   allowedTokenMints: string;
   allowedStockSymbols: string;
   allowedFuturesMarkets: AgentPolicyInput['allowedFuturesMarkets'];
+  x402AllowedOrigins: string;
+  x402AllowedMethods: AgentPolicyInput['x402AllowedMethods'];
+  maxX402PaymentUsd: string;
+  maxX402DailyUsd: string;
   expiresInHours: string;
 }
 
@@ -71,6 +75,10 @@ const DEFAULT_FORM: PolicyForm = {
   allowedTokenMints: CORE_TOKEN_MINTS.join(', '),
   allowedStockSymbols: DEFAULT_STOCKS.join(', '),
   allowedFuturesMarkets: DEFAULT_MARKETS,
+  x402AllowedOrigins: '',
+  x402AllowedMethods: ['GET'],
+  maxX402PaymentUsd: '0.01',
+  maxX402DailyUsd: '1',
   expiresInHours: '24',
 };
 
@@ -84,13 +92,14 @@ function formatDate(value: number) {
 
 function formatRisk(microUsd: string) {
   const value = Number(microUsd) / 1_000_000;
-  return Number.isFinite(value) ? new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value) : '—';
+  return Number.isFinite(value) ? new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 6 }).format(value) : '—';
 }
 
 function intentTitle(intent: AgentIntent) {
   if (intent.kind === 'convert') return 'Convert tokens';
   if (intent.kind === 'stock') return `${intent.side === 'buy' ? 'Buy' : 'Sell'} ${intent.symbol}`;
   if (intent.kind === 'futures-open') return `${intent.side === 'long' ? 'Long' : 'Short'} ${intent.market}`;
+  if (intent.kind === 'x402') return `Pay x402 · ${new URL(intent.url).hostname}`;
   return `${intent.action === 'close' ? 'Close position' : 'Cancel order'} · ${intent.market}`;
 }
 
@@ -98,7 +107,13 @@ function intentDetail(intent: AgentIntent) {
   if (intent.kind === 'convert') return `${intent.amountAtomic} atomic units · ${intent.slippageBps / 100}% max slippage`;
   if (intent.kind === 'stock') return `${intent.amount} ${intent.side === 'buy' ? 'USDC' : intent.symbol} · ${intent.slippageBps / 100}% max slippage`;
   if (intent.kind === 'futures-open') return `${atomicToDecimal(intent.collateralAtomic, 6)} USDC collateral · ${intent.leverageBps / 10_000}× · ${intent.routeChoice}`;
+  if (intent.kind === 'x402') return `${intent.method} ${requestPath(intent.url)} · up to ${atomicToDecimal(intent.maxPaymentAtomic, 6)} USDC`;
   return `${intent.venue} · ${short(intent.nativeId, 7)}`;
+}
+
+function requestPath(value: string) {
+  const url = new URL(value);
+  return `${url.pathname}${url.search}`;
 }
 
 function statusClass(status: AgentRequest['status'] | AgentCredentialSummary['status']) {
@@ -177,6 +192,15 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
     }));
   }
 
+  function toggleX402Method(method: AgentPolicyInput['x402AllowedMethods'][number]) {
+    setForm((current) => ({
+      ...current,
+      x402AllowedMethods: current.x402AllowedMethods.includes(method)
+        ? current.x402AllowedMethods.filter((item) => item !== method)
+        : [...current.x402AllowedMethods, method],
+    }));
+  }
+
   async function createCredential() {
     if (!auth.authenticated) { auth.login(); return; }
     if (!auth.walletAddress || !auth.identityToken) { setError('Your Privy wallet is still loading.'); return; }
@@ -205,6 +229,10 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
         allowedTokenMints: splitValues(form.allowedTokenMints),
         allowedStockSymbols: splitValues(form.allowedStockSymbols).map((item) => item.toUpperCase()),
         allowedFuturesMarkets: form.allowedFuturesMarkets,
+        x402AllowedOrigins: splitValues(form.x402AllowedOrigins),
+        x402AllowedMethods: form.x402AllowedMethods,
+        maxX402PaymentAtomic: decimalToAtomic(form.maxX402PaymentUsd, 6),
+        maxX402DailyAtomic: decimalToAtomic(form.maxX402DailyUsd, 6),
         expiresInHours: Number(form.expiresInHours),
       };
       const result = await api<AgentCredentialCreated>('/agent/credentials', {
@@ -320,7 +348,7 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
   if (!auth.authenticated) {
     return (
       <main className="agent-page agent-auth-state">
-        <div className="agent-auth-card"><span><Bot size={27} /></span><p className="agent-kicker">AGENT ACCESS</p><h1>Your wallet stays in charge.</h1><p>Create narrow trading permissions, then choose approval for every request or automatic execution inside those limits.</p><button onClick={auth.login}>Sign in to configure <KeyRound size={16} /></button></div>
+        <div className="agent-auth-card"><span><Bot size={27} /></span><p className="agent-kicker">AGENT ACCESS</p><h1>Your wallet stays in charge.</h1><p>Create narrow capabilities, then choose approval for every request or automatic execution inside those limits.</p><button onClick={auth.login}>Sign in to configure <KeyRound size={16} /></button></div>
       </main>
     );
   }
@@ -328,7 +356,7 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
   return (
     <main className="agent-page">
       <section className="agent-hero">
-        <div><p className="agent-kicker"><span /> USER-CONTROLLED AUTOMATION</p><h1>Agent access, <em>with boundaries.</em></h1><p>Let an AI use Convert, xStocks, and Futures under limits you control. Choose approval each time or one-time delegated execution.</p></div>
+        <div><p className="agent-kicker"><span /> USER-CONTROLLED AUTOMATION</p><h1>Agent access, <em>with boundaries.</em></h1><p>Let an AI use Convert, xStocks, Futures, and x402 API payments under limits you control. Choose approval each time or one-time delegated execution.</p></div>
         <div className="agent-hero-status"><span className="agent-live-dot" /><div><strong>{activeCredentialCount} active agent{activeCredentialCount === 1 ? '' : 's'}</strong><span>{pendingRequests.length} waiting for review</span></div></div>
       </section>
 
@@ -336,8 +364,8 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
       {execution && <div className="agent-success" role="status"><CheckCircle2 size={18} /><div><strong>{execution.result.status === 'confirmed' ? 'Transaction confirmed' : 'Transaction submitted'}</strong><span>{execution.result.status} through {execution.request.execution?.provider} · {short(execution.result.signature, 7)}</span></div><a href={execution.result.explorerUrl} target="_blank" rel="noreferrer">Explorer <ExternalLink size={13} /></a></div>}
 
       <section className="agent-assurances">
-        <div><ShieldCheck size={19} /><span><strong>You choose the approval mode</strong><small>Always ask per trade, or delegate once for automatic execution.</small></span></div>
-        <div><LockKeyhole size={19} /><span><strong>No fiat or general wallet access</strong><small>Onramp, send, export, and arbitrary calls have no agent endpoint.</small></span></div>
+        <div><ShieldCheck size={19} /><span><strong>You choose the approval mode</strong><small>Always ask per action, or delegate once for automatic execution.</small></span></div>
+        <div><LockKeyhole size={19} /><span><strong>No fiat or general wallet access</strong><small>Onramp, send, export, unapproved API origins, and arbitrary wallet calls have no agent endpoint.</small></span></div>
         <div><Clock3 size={19} /><span><strong>Short-lived requests</strong><small>Unsigned requests expire after 15 minutes.</small></span></div>
       </section>
 
@@ -349,7 +377,7 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
             <button type="button" className={form.approvalMode === 'always-ask' ? 'selected' : ''} onClick={() => setForm({ ...form, approvalMode: 'always-ask' })}><ShieldCheck size={18} /><span><strong>Always ask</strong><small>Open Flay, review, and approve every action.</small></span></button>
             <button type="button" className={form.approvalMode === 'automatic' ? 'selected' : ''} disabled={workspace ? !workspace.security.automaticExecutionConfigured : true} onClick={() => setForm({ ...form, approvalMode: 'automatic' })}><Zap size={18} /><span><strong>Full access</strong><small>Execute automatically, only inside these guardrails.</small></span></button>
           </div>{workspace && !workspace.security.automaticExecutionConfigured && <small className="agent-mode-note">Automatic mode needs Privy server signing configuration. Always ask is ready now.</small>}</fieldset>
-          <fieldset className="agent-fieldset"><legend>Allowed products</legend><div className="agent-choice-row">{(['convert', 'stocks', 'futures'] as const).map((product) => <button type="button" key={product} className={form.products.includes(product) ? 'selected' : ''} onClick={() => toggleProduct(product)}><span>{form.products.includes(product) && <Check size={12} />}</span>{product === 'stocks' ? 'xStocks' : product[0].toUpperCase() + product.slice(1)}</button>)}</div></fieldset>
+          <fieldset className="agent-fieldset"><legend>Allowed products</legend><div className="agent-choice-row">{(['convert', 'stocks', 'futures', 'x402'] as const).map((product) => <button type="button" key={product} className={form.products.includes(product) ? 'selected' : ''} onClick={() => toggleProduct(product)}><span>{form.products.includes(product) && <Check size={12} />}</span>{product === 'stocks' ? 'xStocks' : product === 'x402' ? 'x402 APIs' : product[0].toUpperCase() + product.slice(1)}</button>)}</div></fieldset>
           <div className="agent-field-grid">
             <label className="agent-field"><span>Per request</span><div className="agent-input-prefix"><i>$</i><input type="number" min="1" value={form.maxTransactionUsd} onChange={(event) => setForm({ ...form, maxTransactionUsd: event.target.value })} /></div></label>
             <label className="agent-field"><span>Rolling 24 hours</span><div className="agent-input-prefix"><i>$</i><input type="number" min="1" value={form.maxDailyUsd} onChange={(event) => setForm({ ...form, maxDailyUsd: event.target.value })} /></div></label>
@@ -361,6 +389,11 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
           {form.products.includes('futures') && <>
             <fieldset className="agent-fieldset"><legend>Allowed futures markets</legend><div className="agent-choice-row">{DEFAULT_MARKETS.map((market) => <button type="button" key={market} className={form.allowedFuturesMarkets.includes(market) ? 'selected' : ''} onClick={() => toggleMarket(market)}><span>{form.allowedFuturesMarkets.includes(market) && <Check size={12} />}</span>{market}</button>)}</div></fieldset>
             <div className="agent-field-grid"><label className="agent-field"><span>Maximum leverage</span><div className="agent-input-suffix"><input type="number" min="1" max="10" value={form.maxFuturesLeverage} onChange={(event) => setForm({ ...form, maxFuturesLeverage: event.target.value })} /><i>×</i></div></label><label className="agent-field"><span>Open position limit</span><input type="number" min="1" max="20" value={form.maxOpenFuturesPositions} onChange={(event) => setForm({ ...form, maxOpenFuturesPositions: event.target.value })} /></label></div>
+          </>}
+          {form.products.includes('x402') && <>
+            <label className="agent-field"><span>Allowed x402 HTTPS origins</span><textarea rows={3} value={form.x402AllowedOrigins} onChange={(event) => setForm({ ...form, x402AllowedOrigins: event.target.value })} /><small>Origin only, for example https://api.example.com. Private networks, redirects, credentials, custom ports, and arbitrary headers are blocked.</small></label>
+            <fieldset className="agent-fieldset"><legend>Allowed x402 methods</legend><div className="agent-choice-row">{(['GET', 'POST'] as const).map((method) => <button type="button" key={method} className={form.x402AllowedMethods.includes(method) ? 'selected' : ''} onClick={() => toggleX402Method(method)}><span>{form.x402AllowedMethods.includes(method) && <Check size={12} />}</span>{method}</button>)}</div></fieldset>
+            <div className="agent-field-grid"><label className="agent-field"><span>x402 per payment</span><div className="agent-input-prefix"><i>$</i><input type="number" min="0.000001" step="0.000001" value={form.maxX402PaymentUsd} onChange={(event) => setForm({ ...form, maxX402PaymentUsd: event.target.value })} /></div></label><label className="agent-field"><span>x402 rolling 24 hours</span><div className="agent-input-prefix"><i>$</i><input type="number" min="0.000001" step="0.000001" value={form.maxX402DailyUsd} onChange={(event) => setForm({ ...form, maxX402DailyUsd: event.target.value })} /></div></label></div>
           </>}
           <button className="agent-primary" disabled={Boolean(busy) || form.products.length === 0} onClick={() => void createCredential()}>{busy === 'delegate' ? <><LoaderCircle className="spin" size={16} /> Authorizing Full access</> : busy === 'create' ? <><LoaderCircle className="spin" size={16} /> Creating secure capability</> : <><KeyRound size={16} /> Create agent credential</>}</button>
           <p className="agent-card-note"><ShieldCheck size={14} /> Flay stores only a SHA-256 hash. The credential is shown once.</p>
@@ -375,7 +408,7 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
 
           <section className="agent-card agent-credentials-card">
             <header><div><p className="agent-kicker">ACTIVE ACCESS</p><h2>Capability credentials</h2></div><span>{workspace?.credentials.length ?? 0}</span></header>
-            {!workspace?.credentials.length ? <div className="agent-empty compact"><KeyRound size={22} /><p>No agent credentials yet.</p></div> : <div className="agent-credential-list">{workspace.credentials.map((item) => <article key={item.id}><div><strong>{item.name}</strong><span>{item.approvalMode === 'automatic' ? 'Full access' : 'Always ask'} · {item.products.join(' · ')} · expires {formatDate(item.expiresAt)}</span><small>${item.maxTransactionUsd}/request · ${item.maxDailyUsd}/24h · {item.maxSlippageBps} bps{item.products.includes('futures') ? ` · ${item.maxFuturesLeverage}× max` : ''}</small></div><span className={`agent-status ${statusClass(item.status)}`}>{item.status}</span>{item.status === 'active' && <button onClick={() => void revoke(item)} disabled={Boolean(busy)} aria-label={`Revoke ${item.name}`}>{busy === `revoke:${item.id}` ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button>}</article>)}</div>}
+            {!workspace?.credentials.length ? <div className="agent-empty compact"><KeyRound size={22} /><p>No agent credentials yet.</p></div> : <div className="agent-credential-list">{workspace.credentials.map((item) => <article key={item.id}><div><strong>{item.name}</strong><span>{item.approvalMode === 'automatic' ? 'Full access' : 'Always ask'} · {item.products.join(' · ')} · expires {formatDate(item.expiresAt)}</span><small>${item.maxTransactionUsd}/request · ${item.maxDailyUsd}/24h · {item.maxSlippageBps} bps{item.products.includes('futures') ? ` · ${item.maxFuturesLeverage}× max` : ''}{item.products.includes('x402') ? ` · $${atomicToDecimal(item.maxX402PaymentAtomic, 6)} x402 max` : ''}</small></div><span className={`agent-status ${statusClass(item.status)}`}>{item.status}</span>{item.status === 'active' && <button onClick={() => void revoke(item)} disabled={Boolean(busy)} aria-label={`Revoke ${item.name}`}>{busy === `revoke:${item.id}` ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button>}</article>)}</div>}
             {auth.walletDelegated && <button className="agent-delegation-revoke" disabled={Boolean(busy)} onClick={() => void revokeAutomaticAccess()}>{busy === 'revoke-delegation' ? <LoaderCircle className="spin" size={14} /> : <LockKeyhole size={14} />} Revoke automatic wallet access</button>}
           </section>
         </div>
@@ -386,9 +419,9 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
         {!workspace?.events.length ? <div className="agent-empty compact"><Clock3 size={21} /><p>No agent events yet.</p></div> : <div className="agent-audit-list">{workspace.events.slice(0, 12).map((event) => <div key={event.id}><span className={`agent-audit-mark ${event.type.includes('completed') ? 'done' : event.type.includes('failed') || event.type.includes('rejected') || event.type.includes('revoked') ? 'stop' : ''}`} /><div><strong>{event.type.replaceAll('-', ' ')}</strong><p>{event.detail}</p></div><time>{formatDate(event.createdAt)}</time></div>)}</div>}
       </section>
 
-      {created && <div className="agent-modal-backdrop" role="presentation"><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="credential-title"><button className="agent-modal-close" onClick={() => setCreated(null)} aria-label="Close"><X size={16} /></button><span className="agent-modal-icon"><KeyRound size={23} /></span><p className="agent-kicker">SHOWN ONCE</p><h2 id="credential-title">Copy the agent credential</h2><p>Give this bearer credential only to the agent you trust. Flay cannot recover it after you close this window. Any standards-compatible MCP client can use the connection below.</p><div className="agent-secret"><code>{created.credential}</code><button onClick={() => void copyCredential()} aria-label="Copy agent credential">{copied ? <Check size={16} /> : <Clipboard size={16} />}</button></div><div className="agent-code-sample"><span>MCP transport · Streamable HTTP</span><code>{`${window.location.origin}/api/mcp`}</code><span>Authorization header</span><code>{`Bearer ${created.credential.slice(0, 28)}…`}</code></div><div className="agent-modal-warning"><LockKeyhole size={16} /><span>{created.summary.approvalMode === 'automatic' ? 'This can execute only the selected trading products inside your guardrails. Fiat, sends, exports, policy changes, and arbitrary programs remain blocked.' : 'This can create approval requests only. It cannot sign, spend, fund with fiat, export keys, or call arbitrary programs.'}</span></div><button className="agent-primary" onClick={() => setCreated(null)}>I saved it securely</button></section></div>}
+      {created && <div className="agent-modal-backdrop" role="presentation"><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="credential-title"><button className="agent-modal-close" onClick={() => setCreated(null)} aria-label="Close"><X size={16} /></button><span className="agent-modal-icon"><KeyRound size={23} /></span><p className="agent-kicker">SHOWN ONCE</p><h2 id="credential-title">Copy the agent credential</h2><p>Give this bearer credential only to the agent you trust. Flay cannot recover it after you close this window. Any standards-compatible MCP client can use the connection below.</p><div className="agent-secret"><code>{created.credential}</code><button onClick={() => void copyCredential()} aria-label="Copy agent credential">{copied ? <Check size={16} /> : <Clipboard size={16} />}</button></div><div className="agent-code-sample"><span>MCP transport · Streamable HTTP</span><code>{`${window.location.origin}/api/mcp`}</code><span>Authorization header</span><code>{`Bearer ${created.credential.slice(0, 28)}…`}</code></div><div className="agent-modal-warning"><LockKeyhole size={16} /><span>{created.summary.approvalMode === 'automatic' ? 'This can execute only the selected products inside your guardrails. Fiat, sends, exports, policy changes, and arbitrary programs remain blocked.' : 'This can create approval requests only. It cannot sign, spend, fund with fiat, export keys, or call arbitrary programs.'}</span></div><button className="agent-primary" onClick={() => setCreated(null)}>I saved it securely</button></section></div>}
 
-      {review && <div className="agent-modal-backdrop" role="presentation"><section className="agent-modal agent-review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title"><button className="agent-modal-close" onClick={() => setReview(null)} aria-label="Close"><X size={16} /></button><span className="agent-modal-icon"><ShieldCheck size={23} /></span><p className="agent-kicker">EXACT TRANSACTION REVIEW</p><h2 id="review-title">{intentTitle(review.request.intent)}</h2><p>{intentDetail(review.request.intent)}</p><div className="agent-review-risk"><span>Policy risk counted</span><strong>{formatRisk(review.request.riskUsd)}</strong></div>{review.action.type === 'market' ? <div className="agent-review-table"><div><span>Provider</span><strong>{review.action.prepared.providerLabel}</strong></div><div><span>You pay</span><strong>{review.action.prepared.review.inputAmount && review.action.prepared.review.inputToken ? `${atomicToDecimal(review.action.prepared.review.inputAmount, review.action.prepared.review.inputToken.decimals)} ${review.action.prepared.review.inputToken.symbol}` : '—'}</strong></div><div><span>Minimum received</span><strong>{review.action.prepared.review.minimumOutput && review.action.prepared.review.outputToken ? `${atomicToDecimal(review.action.prepared.review.minimumOutput, review.action.prepared.review.outputToken.decimals)} ${review.action.prepared.review.outputToken.symbol}` : '—'}</strong></div><div><span>Price impact</span><strong>{review.action.prepared.review.priceImpactPct == null ? '—' : `${review.action.prepared.review.priceImpactPct}%`}</strong></div><div><span>Network payment</span><strong>{review.action.prepared.gasPayment?.detail ?? 'Wallet pays the reviewed Solana fee'}</strong></div></div> : <div className="agent-review-table"><div><span>Venue</span><strong>{review.action.prepared.venue}</strong></div><div><span>Action</span><strong>{review.action.prepared.action}</strong></div><div><span>Market</span><strong>{review.action.prepared.review.market ?? '—'}</strong></div><div><span>Collateral</span><strong>{review.action.prepared.review.collateralAtomic ? `${atomicToDecimal(review.action.prepared.review.collateralAtomic, 6)} USDC` : '—'}</strong></div><div><span>Programs checked</span><strong>{review.action.prepared.review.programs.length}</strong></div></div>}{review.action.prepared.review.warnings.length > 0 && <div className="agent-modal-warning"><AlertCircle size={16} /><span>{review.action.prepared.review.warnings.join(' ')}</span></div>}<p className="agent-sign-explainer">This button opens Privy. The agent cannot press it or receive your signature.</p><div className="agent-modal-actions"><button className="agent-reject" disabled={Boolean(busy)} onClick={() => void reject(review.request)}>Reject</button><button className="agent-primary" disabled={Boolean(busy)} onClick={() => void approveAndExecute()}>{busy === `execute:${review.request.id}` ? <><LoaderCircle className="spin" size={16} /> Waiting for Privy</> : <><ShieldCheck size={16} /> Approve in Privy &amp; execute</>}</button></div></section></div>}
+      {review && <div className="agent-modal-backdrop" role="presentation"><section className="agent-modal agent-review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title"><button className="agent-modal-close" onClick={() => setReview(null)} aria-label="Close"><X size={16} /></button><span className="agent-modal-icon"><ShieldCheck size={23} /></span><p className="agent-kicker">EXACT TRANSACTION REVIEW</p><h2 id="review-title">{intentTitle(review.request.intent)}</h2><p>{intentDetail(review.request.intent)}</p><div className="agent-review-risk"><span>Policy risk counted</span><strong>{formatRisk(review.request.riskUsd)}</strong></div>{review.action.type === 'market' ? <div className="agent-review-table"><div><span>Provider</span><strong>{review.action.prepared.providerLabel}</strong></div><div><span>You pay</span><strong>{review.action.prepared.review.inputAmount && review.action.prepared.review.inputToken ? `${atomicToDecimal(review.action.prepared.review.inputAmount, review.action.prepared.review.inputToken.decimals)} ${review.action.prepared.review.inputToken.symbol}` : '—'}</strong></div><div><span>Minimum received</span><strong>{review.action.prepared.review.minimumOutput && review.action.prepared.review.outputToken ? `${atomicToDecimal(review.action.prepared.review.minimumOutput, review.action.prepared.review.outputToken.decimals)} ${review.action.prepared.review.outputToken.symbol}` : '—'}</strong></div><div><span>Price impact</span><strong>{review.action.prepared.review.priceImpactPct == null ? '—' : `${review.action.prepared.review.priceImpactPct}%`}</strong></div><div><span>Network payment</span><strong>{review.action.prepared.gasPayment?.detail ?? 'Wallet pays the reviewed Solana fee'}</strong></div></div> : review.action.type === 'futures' ? <div className="agent-review-table"><div><span>Venue</span><strong>{review.action.prepared.venue}</strong></div><div><span>Action</span><strong>{review.action.prepared.action}</strong></div><div><span>Market</span><strong>{review.action.prepared.review.market ?? '—'}</strong></div><div><span>Collateral</span><strong>{review.action.prepared.review.collateralAtomic ? `${atomicToDecimal(review.action.prepared.review.collateralAtomic, 6)} USDC` : '—'}</strong></div><div><span>Programs checked</span><strong>{review.action.prepared.review.programs.length}</strong></div></div> : <div className="agent-review-table"><div><span>Service</span><strong>{new URL(review.action.prepared.review.url).origin}</strong></div><div><span>Request</span><strong>{review.action.prepared.review.method} {requestPath(review.action.prepared.review.url)}</strong></div><div><span>You pay</span><strong>{atomicToDecimal(review.action.prepared.review.amountAtomic, 6)} USDC</strong></div><div><span>Asset</span><strong>Canonical USDC · {short(review.action.prepared.review.asset, 7)}</strong></div><div><span>Recipient</span><strong>{short(review.action.prepared.review.payTo, 7)}</strong></div><div><span>Fee payer</span><strong>{short(review.action.prepared.review.feePayer, 7)}</strong></div>{review.action.prepared.review.bodySha256 && <div><span>JSON body digest</span><strong>{short(review.action.prepared.review.bodySha256, 8)}</strong></div>}<div><span>Network</span><strong>Solana mainnet · fee sponsored</strong></div></div>}{review.action.prepared.review.warnings.length > 0 && <div className="agent-modal-warning"><AlertCircle size={16} /><span>{review.action.prepared.review.warnings.join(' ')}</span></div>}<p className="agent-sign-explainer">This button opens Privy. The agent cannot press it or receive your signature.</p><div className="agent-modal-actions"><button className="agent-reject" disabled={Boolean(busy)} onClick={() => void reject(review.request)}>Reject</button><button className="agent-primary" disabled={Boolean(busy)} onClick={() => void approveAndExecute()}>{busy === `execute:${review.request.id}` ? <><LoaderCircle className="spin" size={16} /> Waiting for Privy</> : <><ShieldCheck size={16} /> Approve in Privy &amp; execute</>}</button></div></section></div>}
     </main>
   );
 }

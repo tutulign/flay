@@ -53,9 +53,20 @@ function publicCredential(record: CredentialRecord): AgentCredentialSummary {
 }
 
 function publicRequest(record: RequestRecord): AgentRequest {
+  if ((record.status === 'pending' || record.status === 'prepared') && record.expiresAt <= Date.now()) {
+    record.status = 'expired';
+    record.prepared = null;
+  }
   const { userId: _userId, idempotencyKey: _idempotencyKey, fingerprint: _fingerprint, prepared: _prepared, ...request } = record;
-  if (request.status === 'pending' && request.expiresAt <= Date.now()) request.status = 'expired';
-  return structuredClone(request);
+  const safeIntent: AgentIntent = request.intent.kind === 'x402'
+    ? {
+        kind: 'x402',
+        url: request.intent.url,
+        method: request.intent.method,
+        maxPaymentAtomic: request.intent.maxPaymentAtomic,
+      }
+    : structuredClone(request.intent);
+  return structuredClone({ ...request, intent: safeIntent });
 }
 
 export class AgentStore {
@@ -90,6 +101,10 @@ export class AgentStore {
       allowedTokenMints: [...policy.allowedTokenMints],
       allowedStockSymbols: [...policy.allowedStockSymbols],
       allowedFuturesMarkets: [...policy.allowedFuturesMarkets],
+      x402AllowedOrigins: [...policy.x402AllowedOrigins],
+      x402AllowedMethods: [...policy.x402AllowedMethods],
+      maxX402PaymentAtomic: policy.maxX402PaymentAtomic,
+      maxX402DailyAtomic: policy.maxX402DailyAtomic,
       createdAt: now,
       expiresAt: now + policy.expiresInHours * 60 * 60_000,
       revokedAt: null,
@@ -221,7 +236,10 @@ export class AgentStore {
     const record = this.requests.get(id);
     if (!record) throw new AppError(404, 'AGENT_REQUEST_NOT_FOUND', 'This agent request no longer exists.');
     if (record.userId !== userId || record.wallet !== wallet) throw new AppError(403, 'AGENT_REQUEST_FORBIDDEN', 'This agent request belongs to another wallet.');
-    if (record.status === 'pending' && record.expiresAt <= Date.now()) record.status = 'expired';
+    if ((record.status === 'pending' || record.status === 'prepared') && record.expiresAt <= Date.now()) {
+      record.status = 'expired';
+      record.prepared = null;
+    }
     return record;
   }
 
@@ -310,6 +328,16 @@ export class AgentStore {
       .reduce((total, record) => total + BigInt(record.riskUsd), 0n);
   }
 
+  dailyX402RiskAtomic(credentialId: string): bigint {
+    const since = Date.now() - 86_400_000;
+    return [...this.requests.values()]
+      .filter((record) => record.credentialId === credentialId
+        && record.createdAt >= since
+        && record.intent.kind === 'x402'
+        && ['pending', 'prepared', 'completed'].includes(record.status))
+      .reduce((total, record) => total + BigInt(record.riskUsd), 0n);
+  }
+
   inFlightFuturesOpenCount(wallet: string, excludeRequestId?: string): number {
     return [...this.requests.values()].filter((record) => (
       record.wallet === wallet
@@ -348,7 +376,12 @@ export class AgentStore {
 
   private sweep() {
     const now = Date.now();
-    for (const request of this.requests.values()) if (request.status === 'pending' && request.expiresAt <= now) request.status = 'expired';
+    for (const request of this.requests.values()) {
+      if ((request.status === 'pending' || request.status === 'prepared') && request.expiresAt <= now) {
+        request.status = 'expired';
+        request.prepared = null;
+      }
+    }
     for (const [id, bucket] of this.rateBuckets) if (bucket.resetAt <= now) this.rateBuckets.delete(id);
   }
 }

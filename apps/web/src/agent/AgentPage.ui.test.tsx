@@ -43,6 +43,7 @@ describe('Agent workspace UI', () => {
     expect(html).toContain('No fiat or general wallet access');
     expect(html).toContain('Always ask');
     expect(html).toContain('Full access');
+    expect(html).toContain('x402 APIs');
     expect(html).toContain('Automatic actions go directly to recent activity');
   });
 

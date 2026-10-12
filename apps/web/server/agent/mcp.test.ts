@@ -4,7 +4,7 @@ import request from 'supertest';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { JUP_MINT, SOL_MINT, USDC_MINT } from '../../shared/constants.js';
-import type { AgentRequest } from '../../shared/agent.js';
+import type { AgentPolicyInput, AgentRequest } from '../../shared/agent.js';
 import type { TokenInfo } from '../../shared/types.js';
 import { agentRequestResult, selectAgentTokens } from './mcp.js';
 
@@ -18,9 +18,10 @@ vi.mock('@privy-io/node', () => ({
 }));
 
 const identity = { 'x-privy-identity-token': 'valid-mcp-test-token' };
-const futuresPolicy = {
+const futuresPolicy: AgentPolicyInput & { wallet: string } = {
   wallet: SOL_MINT,
   name: 'MCP futures',
+  approvalMode: 'always-ask',
   products: ['futures'],
   maxTransactionUsd: 25,
   maxDailyUsd: 100,
@@ -30,6 +31,10 @@ const futuresPolicy = {
   allowedTokenMints: [SOL_MINT, USDC_MINT],
   allowedStockSymbols: [],
   allowedFuturesMarkets: ['SOL-PERP'],
+  x402AllowedOrigins: [],
+  x402AllowedMethods: ['GET'],
+  maxX402PaymentAtomic: '10000',
+  maxX402DailyAtomic: '1000000',
   expiresInHours: 24,
 };
 const initialize = {
@@ -49,6 +54,7 @@ const expectedTools = [
   'flay_request_futures_manage',
   'flay_request_futures_open',
   'flay_request_stock_trade',
+  'flay_request_x402',
 ];
 
 let app: express.Express;
@@ -125,6 +131,17 @@ describe('Flay Streamable HTTP MCP', () => {
     }
   });
 
+  it('does not expose an x402 POST body through MCP request results', () => {
+    const result = agentRequestResult({
+      id: 'request-x402', credentialId: 'credential-id', credentialName: 'API', wallet: SOL_MINT,
+      approvalMode: 'always-ask',
+      intent: { kind: 'x402', url: 'https://paid.example/report', method: 'POST', body: { privateQuery: 'do-not-return' }, maxPaymentAtomic: '10' },
+      riskUsd: '1', status: 'prepared', createdAt: 1, expiresAt: 2, reviewedAt: 1, rejectedAt: null, failure: null, execution: null,
+    } satisfies AgentRequest);
+    expect(result.structuredContent).toMatchObject({ request: { intent: { kind: 'x402', method: 'POST', maxPaymentAtomic: '10' } } });
+    expect(JSON.stringify(result)).not.toContain('do-not-return');
+  });
+
   it('initializes with the official client, lists only narrow tools, and queues a human-approved proposal', async () => {
     const { credential } = await createCapability();
     const client = await connect(credential);
@@ -139,6 +156,19 @@ describe('Flay Streamable HTTP MCP', () => {
         ok: true,
         capability: { approvalMode: 'always-ask', wallet: SOL_MINT, products: ['futures'] },
       });
+
+      const deniedX402 = await client.callTool({
+        name: 'flay_request_x402',
+        arguments: {
+          idempotencyKey: crypto.randomUUID(),
+          url: 'https://paid.example/report',
+          method: 'GET',
+          maxPaymentAtomic: '1',
+        },
+      });
+      expect(deniedX402.isError).toBe(true);
+      expect(deniedX402.structuredContent).toMatchObject({ error: { code: 'AGENT_PRODUCT_DENIED' } });
+      expect(JSON.stringify(deniedX402)).not.toContain(credential);
 
       const tokenResult = await client.callTool({ name: 'flay_get_tokens', arguments: { query: USDC_MINT } });
       expect(tokenResult.isError).not.toBe(true);

@@ -9,6 +9,7 @@ import type { TokenService } from '../tokens.js';
 import { AppError } from '../errors.js';
 import { AgentService } from './service.js';
 import type { AgentDelegatedSigner } from './delegated-signer.js';
+import type { AgentX402Payments } from './x402-service.js';
 
 const rpcMocks = vi.hoisted(() => ({
   getSignatureStatuses: vi.fn().mockResolvedValue({
@@ -44,6 +45,10 @@ const basePolicy: AgentPolicyInput = {
   allowedTokenMints: [USDC_MINT, SOL_MINT],
   allowedStockSymbols: [],
   allowedFuturesMarkets: ['SOL-PERP'],
+  x402AllowedOrigins: [],
+  x402AllowedMethods: ['GET'],
+  maxX402PaymentAtomic: '10000',
+  maxX402DailyAtomic: '1000000',
   expiresInHours: 24,
 };
 
@@ -498,5 +503,105 @@ describe('automatic Agent product execution', () => {
     expect(request.status).toBe('completed');
     expect(futuresTransactions.prepare).toHaveBeenCalledWith(expect.objectContaining({ action, venue: 'phoenix', nativeId, market: 'SOL-PERP' }));
     expect(futuresTransactions.execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+function x402Harness(approvalMode: 'always-ask' | 'automatic', options: { prepareGate?: Promise<void>; amountAtomic?: string } = {}) {
+  const amountAtomic = options.amountAtomic ?? '1';
+  const x402: AgentX402Payments = {
+    prepare: vi.fn(async (_wallet, intent) => {
+      await options.prepareGate;
+      return {
+        kind: 'x402-payment' as const, preparedId: `x402-${intent.maxPaymentAtomic}`, transaction: 'unsigned-x402', expiresAt: Date.now() + 60_000,
+        review: {
+          url: intent.url, method: intent.method, resource: intent.url, description: 'Paid report', amountAtomic,
+          asset: USDC_MINT, network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', payTo: SOL_MINT,
+          feePayer: USDC_MINT, bodySha256: null, warnings: [],
+        },
+      };
+    }),
+    execute: vi.fn().mockResolvedValue({
+      signature: 'x402-signature', status: 'confirmed', explorerUrl: 'https://explorer.invalid/x402-signature', provider: 'x402',
+      response: {
+        url: 'https://paid.example/report', method: 'GET', amountAtomic, asset: USDC_MINT,
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', payer: SOL_MINT, payTo: USDC_MINT,
+        responseStatus: 200, contentType: 'application/json', body: '{"ok":true}',
+      },
+    }),
+  };
+  const signer = automaticProductSigner();
+  const agents = new AgentService(
+    {} as TokenService,
+    {} as QuoteService,
+    {} as StockService,
+    {} as FuturesService,
+    {} as FuturesTransactionService,
+    signer,
+    x402,
+  );
+  const policy: AgentPolicyInput = {
+    ...basePolicy,
+    approvalMode,
+    products: ['x402'],
+    x402AllowedOrigins: ['https://paid.example'],
+    x402AllowedMethods: ['GET'],
+    maxX402PaymentAtomic: '10',
+    maxX402DailyAtomic: '10',
+  };
+  const created = agents.createCredential('user-x402', SOL_MINT, policy, approvalMode === 'automatic' ? 'delegated-wallet-id' : null);
+  return { agents, created, signer, x402 };
+}
+
+function x402Intent(maxPaymentAtomic = '10') {
+  return { kind: 'x402' as const, url: 'https://paid.example/report', method: 'GET' as const, maxPaymentAtomic };
+}
+
+describe('Agent x402 lifecycle', () => {
+  it('prepares Always ask for exact owner review and returns the settled API result after signing', async () => {
+    const { agents, created, x402 } = x402Harness('always-ask');
+    const submitted = await agents.submit(created.credential, { idempotencyKey: crypto.randomUUID(), intent: x402Intent() });
+    expect(submitted).toMatchObject({ status: 'prepared', approvalMode: 'always-ask', riskUsd: '1' });
+    const review = await agents.review('user-x402', SOL_MINT, submitted.id);
+    expect(review.action).toMatchObject({ type: 'x402', prepared: { transaction: 'unsigned-x402', review: { amountAtomic: '1' } } });
+    const executed = await agents.execute('user-x402', SOL_MINT, submitted.id, 'signed-x402', crypto.randomUUID());
+    expect(executed.request).toMatchObject({ status: 'completed', execution: { provider: 'x402', x402Response: { body: '{"ok":true}' } } });
+    expect(x402.execute).toHaveBeenCalledWith('x402-10', SOL_MINT, 'signed-x402');
+  });
+
+  it('executes Full access inline with the delegated signer and reports the paid body', async () => {
+    const { agents, created, signer, x402 } = x402Harness('automatic');
+    const request = await agents.submit(created.credential, { idempotencyKey: crypto.randomUUID(), intent: x402Intent() });
+    expect(request).toMatchObject({ status: 'completed', approvalMode: 'automatic', execution: { x402Response: { responseStatus: 200 } } });
+    expect(signer.signTransaction).toHaveBeenCalledWith('delegated-wallet-id', SOL_MINT, 'unsigned-x402', expect.stringMatching(/^agent-sign-/));
+    expect(x402.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces concurrent preparation and enforces the x402 rolling daily ceiling', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { agents, created, x402 } = x402Harness('always-ask', { prepareGate: gate, amountAtomic: '6' });
+    const submission = { idempotencyKey: crypto.randomUUID(), intent: x402Intent() };
+    const first = agents.submit(created.credential, submission);
+    const second = agents.submit(created.credential, submission);
+    await vi.waitFor(() => expect(x402.prepare).toHaveBeenCalledTimes(1));
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.id).toBe(b.id);
+    await expect(agents.submit(created.credential, { idempotencyKey: crypto.randomUUID(), intent: x402Intent() }))
+      .rejects.toMatchObject({ code: 'AGENT_X402_DAILY_LIMIT' });
+  });
+
+  it('rejects origins, methods, and caller ceilings outside the owner policy before probing', async () => {
+    const { agents, created, x402 } = x402Harness('always-ask');
+    await expect(agents.submit(created.credential, {
+      idempotencyKey: crypto.randomUUID(), intent: { ...x402Intent(), url: 'https://other.example/report' },
+    })).rejects.toMatchObject({ code: 'AGENT_X402_ORIGIN_DENIED' });
+    await expect(agents.submit(created.credential, {
+      idempotencyKey: crypto.randomUUID(), intent: { ...x402Intent(), method: 'POST', body: { q: 'sol' } },
+    })).rejects.toMatchObject({ code: 'AGENT_X402_METHOD_DENIED' });
+    await expect(agents.submit(created.credential, {
+      idempotencyKey: crypto.randomUUID(), intent: x402Intent('11'),
+    })).rejects.toMatchObject({ code: 'AGENT_X402_PAYMENT_LIMIT' });
+    expect(x402.prepare).not.toHaveBeenCalled();
   });
 });

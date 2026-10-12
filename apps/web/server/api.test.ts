@@ -56,7 +56,9 @@ describe('Flay API boundary', () => {
     expect(response.body.providers.magicBlock).toBe('MagicBlock Ephemeral SPL Token');
     expect(response.body.providers.fiatOnRamp).toBe('Privy Card Onramps');
     expect(response.body.providers.stocks).toEqual(['xStocks', 'Jupiter Swap V2 Router']);
+    expect(response.body.providers.agentPayments).toBe('x402 v2 exact · Solana mainnet USDC payer');
     expect(response.body.readiness.xstocks).toBe(true);
+    expect(response.body.readiness.x402Payer).toBe(true);
     expect(response.body.gasless).toEqual({
       scope: 'eligible-market-swaps-and-usdc-send',
       providers: ['Jupiter', 'Privy'],

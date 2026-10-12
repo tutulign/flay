@@ -465,6 +465,51 @@ Criteria 2 and 4–10 have direct code, test, local production, and deployed-bou
 
 Production signer configuration for criteria 1 and 3 is now active. On 2026-10-07, the Privy app secret passed a read-only API authentication probe, and Railway deployment `476f2811-415c-400b-b8e2-2201783eb59d` completed successfully with both server-only credentials and the QuickNode Solana mainnet RPC. Live health reports `status: ok`, `privyAgentDelegation: true`, an available blockhash, and a successful v0 simulation probe. No secret or wallet key is stored in this file, Git, or browser configuration. This block remains short of `complete` until the owner grants the one-time wallet delegation in Flay and one owner-authorized mainnet smoke transaction confirms the complete configured Privy boundary.
 
+## Active plan: x402 machine-native Agent payments
+
+**Status:** implementation in progress
+**Date:** 2026-10-13
+**Scope:** let a Flay Agent capability pay policy-approved HTTP 402 resources from the same Privy Solana wallet and return the paid API result through Flay's existing REST/MCP request lifecycle
+
+### Research decision
+
+1. Use x402 protocol v2 and pin the current official `@x402/core` and `@x402/svm` release (`2.28.0`). V2 uses `PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, and `PAYMENT-RESPONSE` headers plus CAIP-2 network identifiers.
+2. Ship `exact` SVM payments first. Accept only Solana mainnet (`solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`) and canonical mainnet USDC (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`). USDC's six decimals permit a one-micro-USDC payment, which is below one cent.
+3. Do not depend on the public `x402.org` facilitator for mainnet. Its live `/supported` response currently advertises exact SVM only on Solana devnet. A paid external resource chooses and operates its facilitator; Flay validates the challenge and signs only the payer portion.
+4. Defer `upto` and batch payment channels. They can reduce repeated settlement overhead for high-volume metering but add channel deposits, rent, voucher state, and recovery. Exact payments provide the smallest safe mainnet block and need no Flay smart contract.
+5. Keep Flay as the payer in this block. Making Flay a paid resource server requires a merchant `payTo` address and production mainnet facilitator/sponsor configuration, which are separate operational authorities and are outside this payer block.
+
+### Implementation plan
+
+1. Extend the Agent capability contract with an `x402` product, immutable HTTPS-origin and method allowlists, an atomic-USDC per-payment ceiling, and a rolling atomic-USDC daily ceiling. Preserve existing credentials and callers with safe schema defaults when x402 is not selected.
+2. Add a strict x402 intent for a bounded GET or JSON POST, a caller-declared maximum payment, and a UUID idempotency key. Do not accept custom authorization, cookie, proxy, redirect, transaction, payment-recipient, asset, network, or facilitator fields from the agent.
+3. Add a server-only HTTPS transport that resolves and pins public DNS addresses, rejects credentials in URLs, IP literals, localhost, private/reserved/link-local/metadata destinations, non-HTTPS URLs, non-default ports, redirects, oversized request/response bodies, and unsupported response types. Send no Flay/Privy secrets or upstream API keys.
+4. Parse the first 402 response with the official v2 HTTP client. Select only `exact` Solana-mainnet canonical-USDC requirements whose resource origin matches the requested origin and whose amount is within both the caller and owner caps. Reject malformed, legacy, alternate-asset, alternate-network, or unsupported challenges before signing.
+5. Build the partially signed versioned payment transaction with the official exact SVM client and a no-key payer adapter. Independently validate its fee payer, wallet authority, canonical USDC mint, source/destination associated token accounts, amount, decimals, instruction allowlist, address-table absence, and message digest before returning or signing it.
+6. Store prepared payments in a bounded short-lived server store tied to the capability wallet, method, URL, body digest, requirement, and transaction message. On execution, require the returned signed transaction to have the identical message and the correct payer signature, then retry the exact request once with `PAYMENT-SIGNATURE` and the same idempotency key.
+7. Require a successful `PAYMENT-RESPONSE` settlement receipt before releasing the paid body. Record the transaction signature, payer, network, HTTP status, safe content type, bounded text/JSON response, and settlement time. Never claim settlement or expose provider content when settlement is missing or failed.
+8. Reuse Flay's approval boundary: Always ask prepares the exact transaction for owner review and a Privy signature; Full access uses the existing delegated wallet signer with the same revocation and concurrency checks. Include x402 payments in idempotency, exact daily accounting, request history, failure recovery, and status polling.
+9. Add `flay_request_x402` to the framework-neutral MCP catalog and the existing REST intent route. Return the actual pending, prepared, completed, or failed state; agents retrieve the paid response and receipt through `flay_get_request_status`. Keep fiat onramp, arbitrary wallet sends, raw signing, arbitrary transactions, and policy mutation unavailable.
+10. Update the Agent UI with the x402 product, origin/method/payment guardrails, credential summaries, exact payment review, automatic status, and useful errors. Update health metadata, `.env.example` only if configuration is added, and the root README with the protocol, limits, trust boundary, MCP input/output, and exact-versus-channel limitation.
+11. Add focused tests for schema defaults and strictness, origin normalization, SSRF/DNS and redirect defenses, 402 parsing, network/asset/amount/payee rejection, transaction validation, body/message binding, signature mismatch, settlement receipt enforcement, automatic and Always-ask paths, daily limits, idempotent concurrency, revocation, MCP truthfulness, and existing forbidden authorities.
+12. Run `npm run check`, `npm run release:audit`, the high-severity production dependency audit, diff/secret/artifact checks, and local production MCP/HTTP smoke tests. Compare every item and acceptance criterion with the repository, append the audit below, then deploy and verify the live health/auth boundary before declaring this block complete.
+
+### Acceptance criteria
+
+1. A user can grant x402 separately from Convert, xStocks, and Futures and can constrain it to normalized HTTPS origins, GET/POST methods, a per-call atomic-USDC cap, and a rolling daily atomic-USDC cap.
+2. An allowed x402 v2 exact-SVM endpoint can request as little as one micro-USDC; Flay prepares the canonical USDC payment without requiring the user's SOL for the facilitator-sponsored transaction fee.
+3. Always ask never pays until the owner reviews the origin, path, method, price, recipient, asset, and network and signs the exact validated transaction in Privy.
+4. Full access can complete the same payment inline without the owner opening Flay, but only while the capability and wallet delegation remain active and every x402 guardrail passes.
+5. The initial and paid requests are bound by URL, method, JSON-body digest, idempotency key, payment requirement, and transaction message; retries or concurrency cannot pay twice through Flay.
+6. Alternate networks, noncanonical assets, over-cap amounts, changed requirements, unknown instructions, message/signature mismatches, redirects, private destinations, unsafe response types, absent settlement receipts, and failed settlements fail closed with bounded errors.
+7. MCP returns the real request state and, after success, a bounded paid response plus settlement transaction evidence. It never returns a paid body before settlement and never exposes credentials, private keys, delegated wallet IDs, signed transaction bytes, or authorization material.
+8. x402 requires no Flay smart-contract deployment, introduces no Flay sponsor key, never enables fiat onramp, general wallet sends, raw signing, or arbitrary Solana program calls, and preserves every existing Agent and trading behavior.
+9. The official packages are pinned, tests reproduce both approval modes and security failures, the full repository/release/security checks pass, and the deployed application remains healthy.
+
+### Completion rule
+
+Do not mark this block complete until all twelve implementation items and all nine acceptance criteria are evidenced in a plan-versus-code audit below this plan, including a standards-shaped local paid-resource round trip and deployed health/auth verification. A real third-party mainnet payment remains owner-authorized and must not be sent by an automated test.
+
 ## QuickNode RPC budget stabilization plan
 
 **Status:** complete

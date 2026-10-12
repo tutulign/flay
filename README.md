@@ -16,7 +16,8 @@ Flay is a public beta running on Solana mainnet. It does not custody user assets
 | Futures | Unified Phoenix and GMTrade markets, route comparison, reference candles, collateral controls, order review, positions, and recovery states |
 | Stocks | Official xStocks Solana catalog, Token-2022 scaled-share accounting, issuer reference data, and Jupiter execution |
 | Funds | Privy Card Onramps, wallet receive address, and a bounded USDC transfer flow |
-| AI agent access | Framework-neutral MCP and REST access with wallet-bound capabilities, product allowlists, USD/slippage/leverage limits, and owner-selected `Always ask` or delegated automatic execution |
+| AI agent access | Framework-neutral MCP and REST access with wallet-bound capabilities, product/origin allowlists, spending limits, and owner-selected `Always ask` or delegated automatic execution |
+| Agent payments | x402 v2 exact payments for allowlisted HTTPS APIs using canonical USDC on Solana mainnet, with facilitator-sponsored network fees |
 | Gas sponsorship | Jupiter-managed sponsorship for eligible Jupiter swaps and Privy-managed sponsorship for eligible reviewed SPL swaps and USDC sends |
 | Activity | Wallet-bound transaction history and links to confirmed Solana transactions |
 
@@ -35,6 +36,7 @@ flowchart LR
     A --> X[xStocks]
     A --> AI[Agent policy and execution controller]
     M[Any MCP-compatible agent] -->|Streamable HTTP + capability| AI
+    AI -->|x402 v2 exact USDC| Q[Paid APIs]
     A --> R[Solana RPC]
     C --> S[Solana mainnet]
     F --> S
@@ -57,20 +59,21 @@ Futures candles are stable reference data rendered with TradingView Lightweight 
 - Sponsored flows accept only their reviewed transaction shape and verify the confirmed onchain result.
 - Provider secrets, identity tokens, signed transaction bytes, and private RPC credentials stay out of browser bundles and logs.
 - A provider outage disables affected new actions while preserving visible balances, positions, and recovery controls where cached state is available.
-- AI agent credentials are stored as SHA-256 hashes, expire automatically, and accept only bounded structured trading intents. The approval mode is immutable per credential. Agents never receive Privy signing access, wallet IDs, transaction bytes, identity tokens, fiat funding, wallet export, transfers, or arbitrary program calls.
+- AI agent credentials are stored as SHA-256 hashes, expire automatically, and accept only bounded structured intents. The approval mode is immutable per credential. Agents never receive Privy signing access, wallet IDs, transaction bytes, identity tokens, fiat funding, wallet export, general transfers, or arbitrary program calls.
+- x402 requests use explicit HTTPS-origin and method allowlists. Flay rejects IP literals, private or reserved DNS answers, redirects, credentials, custom ports, oversized bodies, and unsafe response types. POST bodies remain server-private and are represented by a SHA-256 digest during review.
 
 MagicBlock protected-balance functionality is isolated from third-party venues. It does not make Jupiter, Phoenix, GMTrade, or xStocks activity private; those transactions remain observable on Solana.
 
 ## AI agent access
 
-The **Agent access** workspace lets a signed-in user create a narrow capability for an external AI agent. The policy selects Convert, xStocks, and/or Futures, then limits tokens or markets, value per request, rolling 24-hour value, slippage, leverage, open positions, and credential lifetime.
+The **Agent access** workspace lets a signed-in user create a narrow capability for an external AI agent. The policy selects Convert, xStocks, Futures, and/or x402 API payments, then limits tokens, markets, HTTPS origins, methods, value per request, rolling 24-hour value, slippage, leverage, open positions, and credential lifetime.
 
 Each capability has one immutable approval mode:
 
 - **Always ask:** Flay validates the intent and places it in the wallet's approval queue. The user opens the exact provider transaction, reviews its route and economic terms, and approves it with Privy. Ignored requests expire after 15 minutes.
 - **Automatic within guardrails (shown as Full access):** the user first approves Privy's one-time wallet delegation. Flay then resolves the route, validates and simulates the exact transaction, rechecks the capability, asks Privy's server wallet API to sign it, submits it through the existing provider path, and verifies the result. For Phoenix, Flay also signs the provider's strictly validated, expiring wallet-ownership challenge when its short-lived API session needs renewal. The user does not need to keep Flay open or approve each action.
 
-Automatic mode means full access only to the selected Convert, xStocks, and Futures actions within the configured token/market allowlists, per-request value, rolling daily value, slippage, leverage, open-position, expiry, and request-rate limits. It does not authorize fiat onramp, wallet send, key export, message signing, MagicBlock, arbitrary transactions, arbitrary programs, or policy changes. The owner can revoke an individual capability or revoke all automatic wallet access from the Agent workspace.
+Automatic mode means full access only to the selected Convert, xStocks, Futures, and x402 actions within the configured token, market, origin, method, per-request value, rolling daily value, slippage, leverage, open-position, expiry, and request-rate limits. It does not authorize fiat onramp, wallet send, key export, general message signing, MagicBlock, arbitrary transactions, arbitrary programs, or policy changes. The owner can revoke an individual capability or revoke all automatic wallet access from the Agent workspace.
 
 Revocation blocks new and retrying actions immediately. A transaction already submitted to Solana cannot be recalled; Privy's sponsored signing and broadcast is one atomic provider operation, so revocation cannot interrupt that operation after it has begun.
 
@@ -92,7 +95,29 @@ curl -X POST https://flay-production.up.railway.app/api/agent/requests \
   }'
 ```
 
-Supported intent kinds are `convert`, `stock`, `futures-open`, and `futures-manage`. Fiat onramp, wallet send, private-key export, MagicBlock, policy changes, signing, and arbitrary Solana instructions are absent from the capability API. Capability and approval records are bounded in-process data in the current single-replica deployment, so deployments invalidate outstanding credentials and requests. Reissue a capability after a restart.
+Supported intent kinds are `convert`, `stock`, `futures-open`, `futures-manage`, and `x402`. Fiat onramp, wallet send, private-key export, MagicBlock, policy changes, raw signing, and arbitrary Solana instructions are absent from the capability API. Capability and approval records are bounded in-process data in the current single-replica deployment, so deployments invalidate outstanding credentials and requests. Reissue a capability after a restart.
+
+### x402 agent payments
+
+Flay implements the [x402 v2 protocol](https://github.com/x402-foundation/x402/blob/main/specs/x402-specification-v2.md) as a payer. An agent supplies an owner-allowlisted HTTPS URL, `GET` or JSON `POST`, a UUID idempotency key, and a maximum atomic-USDC payment. Flay makes the unpaid request, reads `PAYMENT-REQUIRED`, and accepts only the [exact SVM scheme](https://github.com/x402-foundation/x402/blob/main/specs/schemes/exact/scheme_exact_svm.md) on Solana mainnet with canonical USDC. One atomic unit is 0.000001 USDC.
+
+The official `@x402/core` and `@x402/svm` packages build the payment. Flay then independently checks the wallet authority, facilitator fee payer, USDC mint, source and recipient token accounts, amount, decimals, programs, and complete transaction message. `Always ask` presents that exact transaction in Privy. `Full access` signs it through the existing delegated-wallet boundary. The same URL, method, body, idempotency key, challenge, and transaction are used for the single paid retry.
+
+Flay returns the bounded JSON or plain-text resource only when the server provides a successful `PAYMENT-RESPONSE` settlement receipt. The result and Solana transaction signature are available through `flay_get_request_status`. Flay does not run a merchant facilitator, hold a sponsor key, deploy an x402 smart contract, or implement `upto` payment channels in this block. A paid resource selects its facilitator; production mainnet services must use a mainnet-capable facilitator rather than the public development facilitator.
+
+The REST intent below has a caller ceiling of 0.01 USDC. The capability must separately allow the `x402` product, `https://api.example.com`, `GET`, and an equal or lower owner payment ceiling.
+
+```json
+{
+  "idempotencyKey": "e38f5318-d7cc-4891-9d41-ad2f5655e88f",
+  "intent": {
+    "kind": "x402",
+    "url": "https://api.example.com/v1/report?market=SOL",
+    "method": "GET",
+    "maxPaymentAtomic": "10000"
+  }
+}
+```
 
 ### Model Context Protocol
 
@@ -137,8 +162,9 @@ The MCP catalog is intentionally small:
 | `flay_request_stock_trade` | Submit a policy-checked xStocks intent under the credential's approval mode |
 | `flay_request_futures_open` | Submit a policy-checked Futures open intent under the credential's approval mode |
 | `flay_request_futures_manage` | Submit a policy-checked Futures close or cancel intent under the credential's approval mode |
+| `flay_request_x402` | Request an exact canonical-USDC payment to an allowlisted x402 v2 HTTPS resource and return its settled response |
 
-Trading tools require a UUID idempotency key. Agents should call `flay_get_capability` before trading and trust its `approvalMode`: `Always ask` queues the request for user review, while `automatic` executes within the delegated guardrails without per-request UI approval. `flay_list_requests` and `flay_get_request_status` expose only that credential's records, including failure details, provider transaction evidence, and live onchain confirmation. Concurrent retries with the same key are coalesced and cannot sign or submit twice. There are no MCP tools for fiat funding, wallet sends, raw signing, arbitrary transaction submission, key export, policy mutation, or arbitrary program instructions.
+State-changing tools require a UUID idempotency key. Agents should call `flay_get_capability` before acting and trust its `approvalMode`: `Always ask` queues the request for user review, while `automatic` executes within the delegated guardrails without per-request UI approval. `flay_list_requests` and `flay_get_request_status` expose only that credential's records, including failure details, provider or settlement evidence, and live onchain confirmation. Concurrent retries with the same key are coalesced and cannot sign or submit twice. There are no MCP tools for fiat funding, wallet sends, raw signing, arbitrary transaction submission, key export, policy mutation, or arbitrary program instructions.
 
 ## Technology
 
@@ -150,6 +176,7 @@ Trading tools require a UUID idempotency key. Agents should call `flay_get_capab
 - **Tokenized stocks:** xStocks with Jupiter execution
 - **Protected balance integration:** MagicBlock
 - **Agent controls:** Official MCP Streamable HTTP server and REST capability API with deterministic Zod contracts
+- **Machine payments:** x402 v2 exact SVM using pinned official x402 SDK packages
 - **GMTrade bridge:** pinned Rust sidecar using `gmsol-sdk`
 - **Deployment:** Docker and Railway
 
@@ -178,7 +205,7 @@ Trading tools require a UUID idempotency key. Agents should call `flay_get_capab
 ### Setup
 
 ```sh
-git clone https://github.com/ahumdigar/flay.git
+git clone https://github.com/tutulign/flay.git
 cd flay
 
 cargo build --release --locked \
@@ -274,13 +301,14 @@ Set production variables in Railway rather than committing them. Railway supplie
 curl -fsS https://flay-production.up.railway.app/api/health
 ```
 
-The health response reports sanitized readiness for Privy, RPC, swap providers, Futures, Stocks, MagicBlock, and funding integrations without exposing credentials.
+The health response reports sanitized readiness for Privy, RPC, swap providers, Futures, Stocks, MagicBlock, funding, and the x402 payer integration without exposing credentials.
 
 ## Product boundaries
 
 - Flay currently targets Solana mainnet only.
 - Users choose explicit per-action approval or one-time delegated authorization for bounded Agent execution; confirmation and settlement still depend on Solana and the selected venue.
-- AI agents can submit only policy-approved trading intents. `Always ask` requires a human Privy signature for every value-changing action; automatic mode requires one-time wallet delegation and then signs only Flay-validated transactions within the owner's guardrails.
+- AI agents can submit only policy-approved trading or x402 intents. `Always ask` requires a human Privy signature for every value-changing action; automatic mode requires one-time wallet delegation and then signs only Flay-validated transactions within the owner's guardrails.
+- x402 currently supports exact canonical-USDC payments on Solana mainnet. The paid API must provide a compatible mainnet facilitator and a pre-existing recipient USDC token account.
 - Phoenix execution requires one-time onchain wallet onboarding and collateral setup before it becomes eligible. Full access credentials renew Phoenix's short-lived API session with the delegated wallet after those prerequisites are complete.
 - GMTrade availability depends on the pinned sidecar and upstream GMTrade services.
 - xStocks are tokenized financial instruments, not direct equities. Availability and rights depend on the issuer and the user's jurisdiction.

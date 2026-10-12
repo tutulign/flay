@@ -17,6 +17,7 @@ import {
   agentPublicKeySchema,
   agentStockAmountSchema,
   agentStockSymbolSchema,
+  agentX402UrlSchema,
 } from './schemas.js';
 
 const MCP_BODY_LIMIT = 48 * 1024;
@@ -82,11 +83,19 @@ export function agentRequestResult(request: AgentRequest): CallToolResult {
 }
 
 function publicAgentRequest(request: AgentRequest) {
+  const intent = request.intent.kind === 'x402'
+    ? {
+        kind: request.intent.kind,
+        url: request.intent.url,
+        method: request.intent.method,
+        maxPaymentAtomic: request.intent.maxPaymentAtomic,
+      }
+    : request.intent;
   return {
     id: request.id,
     status: request.status,
     kind: request.intent.kind,
-    intent: request.intent,
+    intent,
     riskMicroUsd: request.riskUsd,
     createdAt: request.createdAt,
     expiresAt: request.expiresAt,
@@ -136,6 +145,10 @@ function registerReadTools(server: McpServer, dependencies: McpDependencies, cre
           allowedTokenMints: capability.allowedTokenMints,
           allowedStockSymbols: capability.allowedStockSymbols,
           allowedFuturesMarkets: capability.allowedFuturesMarkets,
+          x402AllowedOrigins: capability.x402AllowedOrigins,
+          x402AllowedMethods: capability.x402AllowedMethods,
+          maxX402PaymentAtomic: capability.maxX402PaymentAtomic,
+          maxX402DailyAtomic: capability.maxX402DailyAtomic,
           createdAt: capability.createdAt,
           expiresAt: capability.expiresAt,
         },
@@ -361,6 +374,31 @@ function registerTradingTools(server: McpServer, dependencies: McpDependencies, 
     }).strict(),
     annotations: tradingAnnotations,
   }, (input) => submit({ idempotencyKey: input.idempotencyKey, intent: { kind: 'futures-manage', action: input.action, venue: input.venue, market: input.market, nativeId: input.nativeId } }));
+
+  server.registerTool('flay_request_x402', {
+    title: 'Pay for an x402 HTTP resource',
+    description: 'Request a bounded x402 v2 exact-USDC payment to an owner-allowlisted HTTPS API. Flay first reads the 402 challenge, validates Solana mainnet, canonical USDC, price, recipient, fee payer, and transaction instructions, then follows the capability approval mode. Poll flay_get_request_status for the paid response and settlement receipt.',
+    inputSchema: z.object({
+      idempotencyKey: z.string().uuid().describe('A new UUID for a new paid request. Reuse it only for an identical retry.'),
+      url: agentX402UrlSchema.describe('Complete allowlisted HTTPS resource URL. Credentials, fragments, redirects, custom ports, and private destinations are rejected.'),
+      method: z.enum(['GET', 'POST']).default('GET').describe('HTTP method allowed by the owner capability.'),
+      body: z.record(z.string().min(1).max(128), z.unknown()).optional().describe('Optional JSON object for POST, limited to 8 KiB. GET cannot include a body.'),
+      maxPaymentAtomic: agentAtomicAmountSchema.describe('Caller ceiling in atomic USDC. USDC has six decimals, so 1 equals 0.000001 USDC.'),
+    }).strict().superRefine((value, context) => {
+      if (value.method === 'GET' && value.body !== undefined) context.addIssue({ code: 'custom', path: ['body'], message: 'GET x402 requests cannot include a body.' });
+      if (value.body !== undefined && Buffer.byteLength(JSON.stringify(value.body), 'utf8') > 8 * 1024) context.addIssue({ code: 'custom', path: ['body'], message: 'The x402 JSON body must be at most 8 KiB.' });
+    }),
+    annotations: tradingAnnotations,
+  }, (input) => submit({
+    idempotencyKey: input.idempotencyKey,
+    intent: {
+      kind: 'x402',
+      url: input.url,
+      method: input.method,
+      ...(input.body === undefined ? {} : { body: input.body }),
+      maxPaymentAtomic: input.maxPaymentAtomic,
+    },
+  }));
 }
 
 function createFlayMcpServer(dependencies: McpDependencies, credential: string) {

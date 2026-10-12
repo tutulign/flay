@@ -140,6 +140,7 @@ export function createApiRouter(): Router {
         && magicBlockReadiness.mintInitialized
         && magicBlockReadiness.privateTransfers,
       xstocks: stocksReadiness.available,
+      x402Payer: true,
     };
     response.json({
       status: futuresReadiness.rpc.available && futuresReadiness.simulation.available && futuresReadiness.phoenixPublic.publicData && futuresReadiness.gmtrade.publicData && stocksReadiness.available ? 'ok' : 'degraded',
@@ -164,6 +165,7 @@ export function createApiRouter(): Router {
         stocks: ['xStocks', 'Jupiter Swap V2 Router'],
         agentAccess: 'Flay user-selectable approval or delegated capability API',
         agentMcp: 'Model Context Protocol · Streamable HTTP · /api/mcp',
+        agentPayments: 'x402 v2 exact · Solana mainnet USDC payer',
       },
       gasless: {
         scope: 'eligible-market-swaps-and-usdc-send',

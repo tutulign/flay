@@ -15,6 +15,10 @@ const policy: AgentPolicyInput = {
   allowedTokenMints: [SOL_MINT, USDC_MINT],
   allowedStockSymbols: ['AAPLX'],
   allowedFuturesMarkets: ['SOL-PERP'],
+  x402AllowedOrigins: [],
+  x402AllowedMethods: ['GET'],
+  maxX402PaymentAtomic: '10000',
+  maxX402DailyAtomic: '1000000',
   expiresInHours: 24,
 };
 
@@ -92,5 +96,50 @@ describe('agent capability store', () => {
     store.requeueExpiredPreparation(record);
     expect(store.workspace('user-1', SOL_MINT).requests[0]).toMatchObject({ status: 'pending', reviewedAt: null });
     expect(() => store.prepared(record)).toThrowError(expect.objectContaining({ code: 'AGENT_REQUEST_NOT_PREPARED' }));
+  });
+
+  it('cannot execute a prepared action after the parent approval request expires', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-13T00:00:00Z'));
+    const store = new AgentStore();
+    const created = store.createCredential('user-1', SOL_MINT, policy);
+    const credential = store.authenticate(created.credential);
+    const queued = store.createRequest(credential, crypto.randomUUID(), {
+      kind: 'convert', inputMint: USDC_MINT, outputMint: SOL_MINT, amountAtomic: '1000000', slippageBps: 50,
+    }, '1000000');
+    const record = store.ownedRequest('user-1', SOL_MINT, queued.id);
+    store.markPrepared(record, {
+      type: 'market',
+      prepared: {
+        preparedId: crypto.randomUUID(), kind: 'market-swap', provider: 'jupiter', providerLabel: 'Jupiter', wallet: SOL_MINT,
+        transaction: 'transaction', messageHash: 'hash', expiresAt: Date.now() + 60 * 60_000, review: { warnings: [] },
+      },
+    });
+    vi.advanceTimersByTime(15 * 60_000 + 1);
+    expect(store.request(store.ownedRequest('user-1', SOL_MINT, queued.id))).toMatchObject({ status: 'expired' });
+    expect(() => store.prepared(record)).toThrowError(expect.objectContaining({ code: 'AGENT_REQUEST_NOT_PREPARED' }));
+  });
+
+  it('binds an x402 POST body privately but omits it from public history', () => {
+    const store = new AgentStore();
+    const x402Policy: AgentPolicyInput = {
+      ...policy,
+      products: ['x402'],
+      x402AllowedOrigins: ['https://paid.example'],
+      x402AllowedMethods: ['POST'],
+    };
+    const created = store.createCredential('user-1', SOL_MINT, x402Policy);
+    const credential = store.authenticate(created.credential);
+    const intent = {
+      kind: 'x402' as const,
+      url: 'https://paid.example/report',
+      method: 'POST' as const,
+      body: { confidentialQuery: 'private-value' },
+      maxPaymentAtomic: '10',
+    };
+    const request = store.createRequest(credential, crypto.randomUUID(), intent, '1');
+    expect(request.intent).not.toHaveProperty('body');
+    expect(JSON.stringify(store.workspace('user-1', SOL_MINT))).not.toContain('private-value');
+    expect(store.ownedRequest('user-1', SOL_MINT, request.id).intent).toMatchObject({ body: intent.body });
   });
 });

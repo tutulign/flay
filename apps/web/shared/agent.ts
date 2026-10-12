@@ -1,9 +1,10 @@
 import type { FuturesExecution, FuturesPreparedStep, FuturesRouteChoice, FuturesSide, FuturesVenue } from './futures.js';
 import type { ExecutionResult, GasPayment, PreparedTransaction, StockTradeContext, StockTradeSide } from './types.js';
 
-export type AgentProduct = 'convert' | 'stocks' | 'futures';
+export type AgentProduct = 'convert' | 'stocks' | 'futures' | 'x402';
 export type AgentRequestStatus = 'pending' | 'prepared' | 'rejected' | 'expired' | 'failed' | 'completed';
 export type AgentApprovalMode = 'always-ask' | 'automatic';
+export type AgentX402Method = 'GET' | 'POST';
 
 export interface AgentPolicyInput {
   name: string;
@@ -17,6 +18,10 @@ export interface AgentPolicyInput {
   allowedTokenMints: string[];
   allowedStockSymbols: string[];
   allowedFuturesMarkets: Array<'SOL-PERP' | 'BTC-PERP' | 'ETH-PERP'>;
+  x402AllowedOrigins: string[];
+  x402AllowedMethods: AgentX402Method[];
+  maxX402PaymentAtomic: string;
+  maxX402DailyAtomic: string;
   expiresInHours: number;
 }
 
@@ -35,6 +40,10 @@ export interface AgentCredentialSummary {
   allowedTokenMints: string[];
   allowedStockSymbols: string[];
   allowedFuturesMarkets: string[];
+  x402AllowedOrigins: string[];
+  x402AllowedMethods: AgentX402Method[];
+  maxX402PaymentAtomic: string;
+  maxX402DailyAtomic: string;
   createdAt: number;
   expiresAt: number;
   revokedAt: number | null;
@@ -82,7 +91,15 @@ export interface AgentFuturesManageIntent {
   nativeId: string;
 }
 
-export type AgentIntent = AgentConvertIntent | AgentStockIntent | AgentFuturesOpenIntent | AgentFuturesManageIntent;
+export interface AgentX402Intent {
+  kind: 'x402';
+  url: string;
+  method: AgentX402Method;
+  body?: Record<string, unknown>;
+  maxPaymentAtomic: string;
+}
+
+export type AgentIntent = AgentConvertIntent | AgentStockIntent | AgentFuturesOpenIntent | AgentFuturesManageIntent | AgentX402Intent;
 
 export interface AgentIntentSubmission {
   idempotencyKey: string;
@@ -99,6 +116,48 @@ export interface AgentExecutionSummary {
     kind: 'Market' | 'Stock';
     gasPayment?: GasPayment;
     stock?: StockTradeContext;
+  };
+  x402Response?: AgentX402Response;
+}
+
+export interface AgentX402Response {
+  url: string;
+  method: AgentX402Method;
+  amountAtomic: string;
+  asset: string;
+  network: string;
+  payer: string;
+  payTo: string;
+  responseStatus: number;
+  contentType: string;
+  body: string;
+}
+
+export interface AgentX402ExecutionResult {
+  signature: string;
+  status: 'confirmed';
+  explorerUrl: string;
+  provider: 'x402';
+  response: AgentX402Response;
+}
+
+export interface AgentX402PreparedPayment {
+  kind: 'x402-payment';
+  preparedId: string;
+  transaction: string;
+  expiresAt: number;
+  review: {
+    url: string;
+    method: AgentX402Method;
+    resource: string;
+    description: string;
+    amountAtomic: string;
+    asset: string;
+    network: string;
+    payTo: string;
+    feePayer: string;
+    bodySha256: string | null;
+    warnings: string[];
   };
 }
 
@@ -121,7 +180,8 @@ export interface AgentRequest {
 
 export type AgentPreparedAction =
   | { type: 'market'; prepared: PreparedTransaction }
-  | { type: 'futures'; prepared: FuturesPreparedStep };
+  | { type: 'futures'; prepared: FuturesPreparedStep }
+  | { type: 'x402'; prepared: AgentX402PreparedPayment };
 
 export interface AgentReviewResponse {
   request: AgentRequest;
@@ -130,7 +190,7 @@ export interface AgentReviewResponse {
 
 export interface AgentExecutionResponse {
   request: AgentRequest;
-  result: ExecutionResult | FuturesExecution;
+  result: ExecutionResult | FuturesExecution | AgentX402ExecutionResult;
 }
 
 export interface AgentWorkspaceResponse {

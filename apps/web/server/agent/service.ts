@@ -1,4 +1,4 @@
-import type { AgentExecutionResponse, AgentIntent, AgentIntentSubmission, AgentPolicyInput, AgentRequest, AgentReviewResponse } from '../../shared/agent.js';
+import type { AgentExecutionResponse, AgentIntent, AgentIntentSubmission, AgentPolicyInput, AgentRequest, AgentReviewResponse, AgentX402PreparedPayment } from '../../shared/agent.js';
 import type { FuturesIntent, FuturesRouteQuote } from '../../shared/futures.js';
 import { decimalToAtomic } from '../../shared/amounts.js';
 import { AppError, asAppError } from '../errors.js';
@@ -11,6 +11,7 @@ import type { TokenService } from '../tokens.js';
 import { withRpcFallback } from '../rpc.js';
 import { PrivyAgentDelegatedSigner, type AgentDelegatedSigner } from './delegated-signer.js';
 import { AgentStore, type AgentCredentialRecord, type AgentRequestRecord } from './store.js';
+import { AgentX402Service, type AgentX402Payments } from './x402-service.js';
 
 const MICRO_USD = 1_000_000n;
 
@@ -23,9 +24,10 @@ function microToUsd(value: bigint): string {
   return value.toString();
 }
 
-function product(intent: AgentIntent): 'convert' | 'stocks' | 'futures' {
+function product(intent: AgentIntent): 'convert' | 'stocks' | 'futures' | 'x402' {
   if (intent.kind === 'convert') return 'convert';
   if (intent.kind === 'stock') return 'stocks';
+  if (intent.kind === 'x402') return 'x402';
   return 'futures';
 }
 
@@ -47,11 +49,20 @@ function assertPolicyBasics(policy: AgentPolicyInput, intent: AgentIntent) {
   if (intent.kind === 'futures-open' && intent.leverageBps > policy.maxFuturesLeverage * 10_000) {
     throw new AppError(403, 'AGENT_LEVERAGE_LIMIT', `This request exceeds the ${policy.maxFuturesLeverage}× leverage guardrail.`);
   }
+  if (intent.kind === 'x402') {
+    const origin = new URL(intent.url).origin;
+    if (!policy.x402AllowedOrigins.includes(origin)) throw new AppError(403, 'AGENT_X402_ORIGIN_DENIED', 'This x402 service origin is outside the agent allowlist.');
+    if (!policy.x402AllowedMethods.includes(intent.method)) throw new AppError(403, 'AGENT_X402_METHOD_DENIED', `This capability does not allow x402 ${intent.method} requests.`);
+    if (BigInt(intent.maxPaymentAtomic) > BigInt(policy.maxX402PaymentAtomic)) {
+      throw new AppError(403, 'AGENT_X402_PAYMENT_LIMIT', 'The caller maximum exceeds this capability’s per-payment x402 ceiling.');
+    }
+  }
 }
 
 export class AgentService {
   readonly store = new AgentStore();
   private readonly automaticExecutions = new Map<string, Promise<AgentRequest>>();
+  private readonly x402Submissions = new Map<string, Promise<AgentRequest>>();
 
   constructor(
     private readonly tokens: TokenService,
@@ -60,6 +71,7 @@ export class AgentService {
     private readonly futures: FuturesService,
     private readonly futuresTransactions: FuturesTransactionService,
     private readonly delegatedSigner: AgentDelegatedSigner = new PrivyAgentDelegatedSigner(),
+    private readonly x402: AgentX402Payments = new AgentX402Service(),
   ) {}
 
   createCredential(userId: string, wallet: string, policy: AgentPolicyInput, delegatedWalletId: string | null = null) {
@@ -158,6 +170,14 @@ export class AgentService {
     assertPolicyBasics(policy, submission.intent);
     const existing = this.store.existingRequest(credential, submission.idempotencyKey, submission.intent);
     if (existing) return policy.approvalMode === 'automatic' ? this.executeAutomatically(credential, existing) : existing;
+    if (submission.intent.kind === 'x402') {
+      const key = `${credential.id}:${submission.idempotencyKey}`;
+      const active = this.x402Submissions.get(key);
+      if (active) return active;
+      const operation = this.submitX402(credential, policy, submission.idempotencyKey, submission.intent).finally(() => this.x402Submissions.delete(key));
+      this.x402Submissions.set(key, operation);
+      return operation;
+    }
     const risk = await this.riskMicroUsd(credential, policy, submission.intent);
     const maximum = usdToMicro(policy.maxTransactionUsd);
     if (risk > maximum) throw new AppError(403, 'AGENT_TRANSACTION_LIMIT', `This request exceeds the $${policy.maxTransactionUsd} per-request guardrail.`);
@@ -203,7 +223,9 @@ export class AgentService {
     try {
       const result = action.type === 'market'
         ? await this.quotes.execute(action.prepared.preparedId, signedTransaction)
-        : await this.futuresTransactions.execute(action.prepared.preparedId, wallet, signedTransaction, idempotencyKey);
+        : action.type === 'futures'
+          ? await this.futuresTransactions.execute(action.prepared.preparedId, wallet, signedTransaction, idempotencyKey)
+          : await this.x402.execute(action.prepared.preparedId, wallet, signedTransaction);
       const completed = this.store.complete(request, {
         signature: result.signature,
         status: result.status,
@@ -217,6 +239,7 @@ export class AgentService {
             ...(action.prepared.review.stock ? { stock: action.prepared.review.stock } : {}),
           },
         } : {}),
+        ...(action.type === 'x402' && 'response' in result ? { x402Response: result.response } : {}),
       });
       return { request: completed, result };
     } catch (error) {
@@ -312,7 +335,9 @@ export class AgentService {
         this.store.requestPolicy(request);
         result = action.type === 'market'
           ? await this.quotes.execute(action.prepared.preparedId, signedTransaction)
-          : await this.futuresTransactions.execute(action.prepared.preparedId, request.wallet, signedTransaction, `agent-execute-${request.id}`);
+          : action.type === 'futures'
+            ? await this.futuresTransactions.execute(action.prepared.preparedId, request.wallet, signedTransaction, `agent-execute-${request.id}`)
+            : await this.x402.execute(action.prepared.preparedId, request.wallet, signedTransaction);
       }
       return this.store.complete(request, {
         signature: result.signature,
@@ -327,6 +352,7 @@ export class AgentService {
             ...(action.prepared.review.stock ? { stock: action.prepared.review.stock } : {}),
           },
         } : {}),
+        ...(action.type === 'x402' && 'response' in result ? { x402Response: result.response } : {}),
       });
     } catch (error) {
       const appError = asAppError(error, 'AGENT_AUTOMATIC_EXECUTION_FAILED');
@@ -361,6 +387,7 @@ export class AgentService {
       if (openPositions + reservedPositions >= policy.maxOpenFuturesPositions) throw new AppError(403, 'AGENT_POSITION_LIMIT', `This wallet already has the allowed ${policy.maxOpenFuturesPositions} open or pending futures positions.`);
       return BigInt(intent.collateralAtomic);
     }
+    if (intent.kind === 'x402') return BigInt(intent.maxPaymentAtomic);
     return 0n;
   }
 
@@ -423,6 +450,13 @@ export class AgentService {
         }),
       };
     }
+    if (intent.kind === 'x402') {
+      const prepared = await this.x402.prepare(request.wallet, intent, request.idempotencyKey, policy.maxX402PaymentAtomic);
+      if (BigInt(prepared.review.amountAtomic) > BigInt(request.riskUsd)) {
+        throw new AppError(409, 'AGENT_X402_PRICE_CHANGED', 'The x402 price increased after the request was created. Submit a new request with a new maximum.');
+      }
+      return { type: 'x402' as const, prepared };
+    }
     const portfolio = await this.futures.portfolio(request.wallet);
     const venue = portfolio.venues[intent.venue];
     const exists = intent.action === 'close'
@@ -472,5 +506,36 @@ export class AgentService {
   private selectFuturesQuote(quotes: FuturesRouteQuote[], recommended: 'phoenix' | 'gmtrade' | null, choice: 'auto' | 'phoenix' | 'gmtrade') {
     if (choice !== 'auto') return quotes.find((quote) => quote.venue === choice) ?? null;
     return quotes.find((quote) => quote.venue === recommended) ?? quotes.find((quote) => quote.executionEligible) ?? null;
+  }
+
+  private async submitX402(
+    credential: AgentCredentialRecord,
+    policy: AgentPolicyInput,
+    idempotencyKey: string,
+    intent: Extract<AgentIntent, { kind: 'x402' }>,
+  ): Promise<AgentRequest> {
+    const existing = this.store.existingRequest(credential, idempotencyKey, intent);
+    if (existing) return policy.approvalMode === 'automatic' ? this.executeAutomatically(credential, existing) : existing;
+    const prepared: AgentX402PreparedPayment = await this.x402.prepare(
+      credential.wallet,
+      intent,
+      idempotencyKey,
+      policy.maxX402PaymentAtomic,
+    );
+    const risk = BigInt(prepared.review.amountAtomic);
+    if (risk > BigInt(policy.maxX402PaymentAtomic) || risk > BigInt(intent.maxPaymentAtomic)) {
+      throw new AppError(403, 'AGENT_X402_PAYMENT_LIMIT', 'The x402 payment exceeds the caller or owner ceiling.');
+    }
+    if (this.store.dailyX402RiskAtomic(credential.id) + risk > BigInt(policy.maxX402DailyAtomic)) {
+      throw new AppError(403, 'AGENT_X402_DAILY_LIMIT', 'This payment would exceed the rolling x402 daily ceiling.');
+    }
+    if (risk > usdToMicro(policy.maxTransactionUsd)) throw new AppError(403, 'AGENT_TRANSACTION_LIMIT', `This request exceeds the $${policy.maxTransactionUsd} per-request guardrail.`);
+    if (this.store.dailyRiskMicroUsd(credential.id) + risk > usdToMicro(policy.maxDailyUsd)) {
+      throw new AppError(403, 'AGENT_DAILY_LIMIT', `This request would exceed the rolling $${policy.maxDailyUsd} daily guardrail.`);
+    }
+    const created = this.store.createRequest(credential, idempotencyKey, intent, risk.toString());
+    const record = this.store.ownedRequest(credential.userId, credential.wallet, created.id);
+    const request = this.store.markPrepared(record, { type: 'x402', prepared }, policy.approvalMode === 'automatic');
+    return policy.approvalMode === 'automatic' ? this.executeAutomatically(credential, request) : request;
   }
 }
