@@ -11,7 +11,7 @@
 1. Replace the legacy-only delegated-actions path for TEE wallets with Privy's current `useSigners` flow, using the public authorization-key ID while retaining legacy delegation compatibility for older on-device wallets.
 2. Never continue to credential creation while the Privy consent operation is unresolved. Surface cancellation, provider errors, and a bounded timeout directly to the user.
 3. Require the matching authorization-key ID in server automatic-execution readiness and verify that exact signer appears on the exact Privy wallet before creating or using a Full access credential.
-4. Add the public signer-ID configuration to the environment example and Railway build configuration; keep the authorization private key server-only.
+4. Add the public signer-ID configuration to the environment example, Railway configuration, and Docker/Vite build arguments so the deployed browser bundle receives it; keep the authorization private key server-only.
 5. Add focused client and server tests for TEE signer provisioning, timeout behavior, exact-signer verification, mismatch denial, and unchanged legacy behavior.
 6. Update the README, run the complete checks and security scans, deploy, verify production readiness, and compare every result with this plan before marking it complete.
 
@@ -21,7 +21,7 @@
 2. Flay's server accepts only the configured authorization key on the authenticated user's exact Solana wallet; another delegation cannot satisfy the check.
 3. A stalled or rejected Privy operation cannot fall through to credential creation and produces a clear retryable message.
 4. Older on-device wallets retain their supported delegated-actions path.
-5. The signer ID may be browser-visible, while the app secret and authorization private key remain server-only and absent from tracked files and browser bundles.
+5. The deployed browser bundle contains the configured public signer ID, while the app secret and authorization private key remain server-only and absent from tracked files and browser bundles.
 6. Existing Agent, MCP, Convert, Stocks, Futures, authentication, and funding checks remain passing in production.
 
 ### Completion rule
