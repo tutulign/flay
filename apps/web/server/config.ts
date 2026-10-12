@@ -6,6 +6,7 @@ function clean(value: string | undefined): string | undefined {
 }
 
 const rpcUrl = clean(process.env.SOLANA_RPC_URL) ?? 'https://api.mainnet-beta.solana.com';
+const rpcWsUrl = clean(process.env.SOLANA_RPC_WS_URL);
 const fallbackRpcUrl = clean(process.env.SOLANA_FALLBACK_RPC_URL);
 const alchemyPayEnvironment = process.env.ALCHEMY_PAY_ENV === 'production' ? 'production' : 'test';
 const privyFiatOnrampEnvironment = process.env.VITE_PRIVY_ONRAMP_ENV === 'production' ? 'production' : 'sandbox';
@@ -30,6 +31,7 @@ export const config = {
   port: Number(process.env.PORT ?? '5173'),
   host: clean(process.env.HOST) ?? '0.0.0.0',
   rpcUrl,
+  rpcWsUrl,
   fallbackRpcUrl: fallbackRpcUrl === rpcUrl ? undefined : fallbackRpcUrl,
   rpcMaxRequestsPerSecond: boundedInteger(process.env.SOLANA_RPC_MAX_RPS, 8, 1, 100),
   rpcMaxConcurrency: boundedInteger(process.env.SOLANA_RPC_MAX_CONCURRENCY, 4, 1, 32),

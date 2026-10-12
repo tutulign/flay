@@ -20,6 +20,7 @@ export default defineRailway(() => {
       PRIVY_VERIFICATION_KEY: preserve(),
       PROVIDER_TIMEOUT_MS: preserve(),
       SOLANA_RPC_URL: preserve(),
+      SOLANA_RPC_WS_URL: preserve(),
       VITE_PRIVY_APP_ID: preserve(),
       VITE_PRIVY_ONRAMP_ENV: preserve(),
     },

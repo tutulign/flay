@@ -1,5 +1,46 @@
 # Flay implementation record
 
+## Active plan: RPCFast HTTP and WebSocket transport
+
+**Status:** complete
+**Date:** 2026-10-12
+**Scope:** replace the primary Solana RPC with the supplied RPCFast endpoint and add its paired WebSocket transport without exposing either credential to the browser
+
+### Implementation plan
+
+1. Add a server-only `SOLANA_RPC_WS_URL` setting and pass it to the primary Solana `Connection` as `wsEndpoint`; retain HTTP as the required request transport and preserve the existing HTTP fallback.
+2. Add the WebSocket setting to the environment example and Railway infrastructure definition without committing the supplied credential.
+3. Set the supplied HTTP and WSS endpoints in the ignored local environment and linked Railway service.
+4. Add focused configuration coverage, run the required check and release audit, verify both endpoints safely, compare the result with this plan, and record the completion audit here.
+
+### Acceptance criteria
+
+1. Server-side Solana requests use the supplied RPCFast HTTPS endpoint and subscriptions use the supplied RPCFast WSS endpoint.
+2. RPC credentials do not enter the browser bundle, tracked source, logs, or test snapshots.
+3. The existing HTTP fallback and rate limiting continue to work.
+4. Type checking, tests, production build, release audit, endpoint probes, and production health verification pass.
+
+### Completion rule
+
+Do not declare this update complete until the code, local configuration, Railway configuration, verification results, and this plan agree.
+
+## RPCFast HTTP and WebSocket transport audit
+
+**Status:** complete
+**Date:** 2026-10-12
+
+### Plan-to-code comparison
+
+1. **Paired transports — pass.** `server/config.ts` reads the server-only `SOLANA_RPC_WS_URL`, and `server/rpc.ts` passes it to the primary Solana `Connection` as `wsEndpoint`. HTTPS remains the request transport, while the existing independently rate-limited HTTP fallback remains unchanged.
+2. **Configuration surfaces — pass.** `.env.example` documents the WSS setting without a credential, `.railway/railway.ts` preserves it, the ignored local `.env` contains the supplied HTTPS/WSS pair, and Railway accepted both production variables without printing their values.
+3. **Focused and live verification — pass.** The transport test proves that Web3 receives separate HTTP and WSS endpoints. A direct mainnet probe obtained a blockhash over HTTPS and a live slot notification over WSS. The complete check passed with 330 tests and 8 credential-gated skips, and the production build succeeded.
+4. **Security and release verification — pass.** The release audit scanned 246 browser bundle files successfully. Diff checks and a tracked-source hostname scan confirmed that the supplied credential is absent from Git and browser artifacts.
+5. **Production — pass.** Railway deployment `e521d2d0-a80e-407e-b823-2f7314dbe8ae` is online. The live health endpoint returns `status: ok`, identifies `solana-rpc.rpcfast.com` as the RPC provider, obtains a latest blockhash, and accepts a current v0 simulation probe.
+
+### Acceptance-criteria result
+
+All four acceptance criteria pass. Flay now uses the supplied RPCFast HTTPS endpoint for server RPC calls and the paired WSS endpoint for subscriptions, while retaining HTTP rate limiting and fallback behavior and keeping both credential-bearing URLs out of tracked and browser-visible code.
+
 ## Permanent completion rule
 
 Before implementing a new block, write its plan and acceptance criteria here. Before declaring it complete, compare the final repository with every requirement, run the relevant build, test, security, and live checks, and add a plan-to-code completion audit here. Do not stop at a visually finished interface when execution, recovery, security, or evidence remains incomplete.

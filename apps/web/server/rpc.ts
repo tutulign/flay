@@ -16,6 +16,7 @@ export const connection = new Connection(config.rpcUrl, {
   confirmTransactionInitialTimeout: 45_000,
   disableRetryOnRateLimit: true,
   fetch: limitedFetch(),
+  wsEndpoint: config.rpcWsUrl,
 });
 
 export const fallbackConnection = config.fallbackRpcUrl
