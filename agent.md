@@ -2,7 +2,7 @@
 
 ## Active plan: Privy TEE Full access provisioning
 
-**Status:** in progress
+**Status:** complete
 **Date:** 2026-10-12
 **Scope:** repair Full access credential creation and production MCP execution for Privy TEE/unified Solana wallets by provisioning and verifying Flay's exact authorization-key signer, exposing capability/request outcomes, and removing provider-data inconsistencies that block guarded execution
 
@@ -35,6 +35,28 @@
 ### Completion rule
 
 Do not declare this fix complete until code, configuration, tests, release scans, and the live deployment match this plan. User consent itself remains an explicit wallet-owner action.
+
+## Privy TEE Full access provisioning audit
+
+**Status:** complete
+**Date:** 2026-10-12
+
+### Plan-to-code comparison
+
+1. **TEE signer consent — pass.** The Agent workspace provisions Privy's configured authorization-key signer through `useSigners` for TEE wallets, retains the compatible delegated-actions path for older on-device wallets, and creates no automatic capability until the consent call resolves successfully.
+2. **Bounded failure behavior — pass.** Cancellation, provider rejection, timeout, missing wallet metadata, and an absent or mismatched authorization signer stop credential creation with a retryable user-facing result.
+3. **Exact server-side signer enforcement — pass.** Automatic credential creation and every delegated transaction submission re-read the authenticated user's exact Privy wallet and require Flay's configured signer ID. Another authorization key cannot satisfy the check.
+4. **Configuration boundary — pass.** The public authorization-key ID is documented and passed into the Railway browser build. The corresponding private key and Privy app secret remain server-only and are absent from tracked source and release bundles.
+5. **MCP execution evidence — pass.** `flay_get_capability`, `flay_list_requests`, and `flay_get_request_status` expose the authenticated credential's real approval mode and its own bounded lifecycle records, failures, execution provider, signature, Explorer URL, and a fresh Solana confirmation lookup. Credential ownership checks prevent cross-capability request reads.
+6. **Trusted token discovery and valuation — pass.** Exact canonical SOL and JUP lookups receive cached live Jupiter prices for policy valuation and fail closed when unavailable. MCP discovery returns only verified, tradable assets, prioritizes canonical exact-symbol matches, deduplicates mints, and excludes unverified USDC lookalikes.
+7. **Complete xStocks discovery — pass.** Agent discovery waits for the complete official Solana xStocks catalog or returns an explicit retryable provider failure; the deployed catalog reached `ready` with 1,374 assets and never presents the warm-up entry as complete.
+8. **Automated verification — pass.** The focused Agent/MCP/Privy/token suites passed 54 tests. The complete check passed 340 tests with 8 explicitly gated skips, TypeScript and the production build passed, and the release audit scanned 246 browser bundle files. The production dependency audit reported only the three existing low-severity MagicBlock transitive findings, and secret scans found no server credential in tracked or browser-visible files.
+9. **Deployment — pass.** Commit `f240771` is deployed in Railway deployment `fce994e4-7ce8-48e4-854e-477e077acc47`. Production health, delegated-agent readiness, exact SOL live pricing, the public signer ID, and the complete xStocks catalog were verified on the live service.
+10. **Wallet-owner live acceptance — pass.** Using a newly created Full access credential, the production MCP reported `approvalMode: automatic` and executed a SOL-to-USDC conversion without UI review or manual Privy approval. Request `bbc00ecb-94aa-4a01-b397-7e5f464252f3` completed through Jupiter Swap V2. Solana transaction `4394wdTHXDopsYAZiARFWf8dG2WSfUR6t9WY9thXVeUs8wwGnGW4rpWQJ3xuxXEjvuya8u11bQ9rw5SdGaZUkVTA` finalized successfully with no chain error, debiting 183,892 lamports of SOL and crediting 19,997 atomic USDC units to the bound wallet. Jupiter supplied the fee payer.
+
+### Acceptance-criteria result
+
+All ten acceptance criteria pass. A current Full access credential can execute policy-compliant MCP trades from the user's existing Privy wallet without per-request UI approval, while exact-wallet signer verification, capability guardrails, credential-scoped lifecycle visibility, trusted asset discovery, and the absence of fiat or arbitrary signing tools preserve the intended authority boundary.
 
 ## Active plan: RPCFast HTTP and WebSocket transport
 
