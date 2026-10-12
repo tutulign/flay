@@ -467,7 +467,7 @@ Production signer configuration for criteria 1 and 3 is now active. On 2026-10-0
 
 ## Active plan: x402 credential validation feedback
 
-**Status:** implementation in progress
+**Status:** complete
 **Date:** 2026-10-13
 **Incident:** selecting x402 without an allowed HTTPS origin correctly returns a structured validation error, but the Agent UI discards the field detail and shows only `Some submitted fields are invalid.`
 
@@ -485,6 +485,14 @@ Production signer configuration for criteria 1 and 3 is now active. On 2026-10-0
 4. Valid credential creation and every existing Agent/x402 behavior remain unchanged.
 
 Do not mark this fix complete until all implementation items and acceptance criteria are evidenced below.
+
+### Plan-versus-code completion audit
+
+1. **Structured validation feedback — pass.** `src/lib/api.ts` now extracts the first server `formErrors` or `fieldErrors` message from `ApiClientError.details`, retaining the generic API message only when no structured detail exists. The focused test reproduces the exact x402-origin response and proves the actionable field message is displayed.
+2. **Pre-submit x402 validation — pass.** `src/agent/policy-validation.ts` validates a required HTTPS origin without a path/query/credentials/fragment/custom port, at least one allowed method, positive six-decimal limits, and a daily limit at least as large as the per-payment limit. `AgentPage.tsx` runs it before delegation or the credential API and labels the origin as required with the verified test-origin example.
+3. **Verification and deployment — pass.** Focused type/UI validation passed 3 files and 8 tests. The complete `npm run check` passed the production build, 60 test files, and 368 tests, with 4 files and 8 intentionally gated tests skipped. `npm run release:audit` passed 246 bundles and `git diff --check` passed. Railway deployment `284f5ee3-2f26-4099-b3b1-4809464b7d64` from commit `c22b4da` passed its health check; production returns HTTP 200 with `status: ok` and `x402Payer: true`, and the deployed bundle contains the required-origin, path, and daily-limit guidance.
+
+All three implementation items and all four acceptance criteria are satisfied. Valid credential creation and the existing Agent/x402 suite remain green.
 
 ## Active plan: x402 machine-native Agent payments
 
