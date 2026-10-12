@@ -642,7 +642,7 @@ The implementation is committed as `aefe1e5` and Railway deployment `f53b7326-8b
 
 ## Active plan: x402 production DNS compatibility repair
 
-**Status:** deployed; final owner-authorized paid revalidation pending
+**Status:** complete
 **Date:** 2026-10-13
 
 ### Incident
@@ -698,3 +698,7 @@ The owner retried the deployed Full access flow successfully and received a one-
 The single owner-authorized production request transferred exactly 1,000 atomic canonical USDC (0.001 USDC) from `FexVX…nLMc7` to the challenged recipient. Solana finalized transaction `4WDeS9gzJC3wcunMH2Nkh4DBeSBwqfFrSrQXpqcxxUokz7E4oZ6oaWRXbSSjGSJPGn1QcDCSPaHRQJP5W86kUxqg` at slot `456228931` with no error. Its decoded instruction is one `transferChecked` for canonical mainnet USDC, amount `1000`, decimals `6`; the resource facilitator paid the network fee. A replay using the same finalized signed transaction and idempotency key returned a fresh HTTP 402 and created no second on-chain transfer.
 
 That live request ran before the settlement-accounting deployment and exposed the oversized-body bug after settlement. The corrected production build is live, but another paid request has not been made because the owner's authorization covered exactly one payment and the deployment restart invalidated the in-memory capability. The repair remains short of its final live post-fix acceptance check until the owner explicitly authorizes a second 0.001 USDC payment and provides a newly issued capability. No further payment is implied by the first authorization.
+
+#### Final post-fix production acceptance
+
+The owner explicitly authorized one additional 0.001 USDC payment and supplied a replacement Full access capability. Production request `9593148f-202f-4945-9597-adab360dab4c` completed through MCP with `failure: null`, `fundsMoved: true`, `humanApprovalRequired: false`, HTTP 200, `bodyTruncated: true`, and the bounded 64 KiB JSON prefix. Solana independently reports transaction `3t6o8idy6TmBGKppFYSVtbyueRXtJN1fwkyfrVPusbJEMj3zuAKEnTGEnYkmaF9k2DAqYmNLLtnVA47DfksnuJCy` finalized without error at slot `456232686`. Its decoded instruction is exactly one `transferChecked` from the capability wallet for canonical mainnet USDC, amount `1000`, decimals `6`; the facilitator paid the 10,001-lamport network fee. This satisfies implementation item 5, original acceptance criterion 4, and both post-settlement acceptance criteria. All implementation items and acceptance criteria in this repair plan are now evidenced and complete.
