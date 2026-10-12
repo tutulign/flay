@@ -33,6 +33,7 @@ import { CORE_TOKEN_MINTS } from '../../shared/constants';
 import type { FlayAuth } from '../auth';
 import { api, fromBase64, query, readableError, toBase64 } from '../lib/api';
 import { waitForAgentDelegation } from './delegation';
+import { validateX402PolicyFields } from './policy-validation';
 import './agent.css';
 
 interface AgentPageProps {
@@ -204,6 +205,19 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
   async function createCredential() {
     if (!auth.authenticated) { auth.login(); return; }
     if (!auth.walletAddress || !auth.identityToken) { setError('Your Privy wallet is still loading.'); return; }
+    const x402AllowedOrigins = splitValues(form.x402AllowedOrigins);
+    const x402ValidationError = validateX402PolicyFields({
+      enabled: form.products.includes('x402'),
+      origins: x402AllowedOrigins,
+      methods: form.x402AllowedMethods,
+      perPaymentUsd: form.maxX402PaymentUsd,
+      dailyUsd: form.maxX402DailyUsd,
+    });
+    if (x402ValidationError) {
+      setCreated(null);
+      setError(x402ValidationError);
+      return;
+    }
     const needsDelegation = form.approvalMode === 'automatic' && !auth.walletDelegated;
     setBusy(needsDelegation ? 'delegate' : 'create'); setError(null); setCreated(null);
     try {
@@ -229,7 +243,7 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
         allowedTokenMints: splitValues(form.allowedTokenMints),
         allowedStockSymbols: splitValues(form.allowedStockSymbols).map((item) => item.toUpperCase()),
         allowedFuturesMarkets: form.allowedFuturesMarkets,
-        x402AllowedOrigins: splitValues(form.x402AllowedOrigins),
+        x402AllowedOrigins,
         x402AllowedMethods: form.x402AllowedMethods,
         maxX402PaymentAtomic: decimalToAtomic(form.maxX402PaymentUsd, 6),
         maxX402DailyAtomic: decimalToAtomic(form.maxX402DailyUsd, 6),
@@ -391,7 +405,7 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
             <div className="agent-field-grid"><label className="agent-field"><span>Maximum leverage</span><div className="agent-input-suffix"><input type="number" min="1" max="10" value={form.maxFuturesLeverage} onChange={(event) => setForm({ ...form, maxFuturesLeverage: event.target.value })} /><i>×</i></div></label><label className="agent-field"><span>Open position limit</span><input type="number" min="1" max="20" value={form.maxOpenFuturesPositions} onChange={(event) => setForm({ ...form, maxOpenFuturesPositions: event.target.value })} /></label></div>
           </>}
           {form.products.includes('x402') && <>
-            <label className="agent-field"><span>Allowed x402 HTTPS origins</span><textarea rows={3} value={form.x402AllowedOrigins} onChange={(event) => setForm({ ...form, x402AllowedOrigins: event.target.value })} /><small>Origin only, for example https://api.example.com. Private networks, redirects, credentials, custom ports, and arbitrary headers are blocked.</small></label>
+            <label className="agent-field"><span>Allowed x402 HTTPS origins</span><textarea rows={3} placeholder="https://x402engine.app" value={form.x402AllowedOrigins} onChange={(event) => setForm({ ...form, x402AllowedOrigins: event.target.value })} /><small>Required. Enter an origin only, such as https://x402engine.app. Do not include /api paths. Private networks, redirects, credentials, custom ports, and arbitrary headers are blocked.</small></label>
             <fieldset className="agent-fieldset"><legend>Allowed x402 methods</legend><div className="agent-choice-row">{(['GET', 'POST'] as const).map((method) => <button type="button" key={method} className={form.x402AllowedMethods.includes(method) ? 'selected' : ''} onClick={() => toggleX402Method(method)}><span>{form.x402AllowedMethods.includes(method) && <Check size={12} />}</span>{method}</button>)}</div></fieldset>
             <div className="agent-field-grid"><label className="agent-field"><span>x402 per payment</span><div className="agent-input-prefix"><i>$</i><input type="number" min="0.000001" step="0.000001" value={form.maxX402PaymentUsd} onChange={(event) => setForm({ ...form, maxX402PaymentUsd: event.target.value })} /></div></label><label className="agent-field"><span>x402 rolling 24 hours</span><div className="agent-input-prefix"><i>$</i><input type="number" min="0.000001" step="0.000001" value={form.maxX402DailyUsd} onChange={(event) => setForm({ ...form, maxX402DailyUsd: event.target.value })} /></div></label></div>
           </>}

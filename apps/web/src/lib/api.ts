@@ -65,7 +65,16 @@ export function toBase64(value: Uint8Array): string {
 }
 
 export function readableError(error: unknown): string {
-  if (error instanceof ApiClientError) return error.message;
+  if (error instanceof ApiClientError) {
+    const details = error.details as { formErrors?: unknown; fieldErrors?: unknown } | undefined;
+    const fieldErrors = details?.fieldErrors && typeof details.fieldErrors === 'object'
+      ? Object.values(details.fieldErrors as Record<string, unknown>)
+      : [];
+    const detail = [details?.formErrors, ...fieldErrors]
+      .flatMap((value) => Array.isArray(value) ? value : [])
+      .find((value): value is string => typeof value === 'string' && value.length > 0);
+    return detail ?? error.message;
+  }
   if (error instanceof Error) {
     if (/reject|denied|cancel/i.test(error.message)) return 'The wallet signature was rejected. Nothing was submitted.';
     return error.message;

@@ -465,6 +465,27 @@ Criteria 2 and 4–10 have direct code, test, local production, and deployed-bou
 
 Production signer configuration for criteria 1 and 3 is now active. On 2026-10-07, the Privy app secret passed a read-only API authentication probe, and Railway deployment `476f2811-415c-400b-b8e2-2201783eb59d` completed successfully with both server-only credentials and the QuickNode Solana mainnet RPC. Live health reports `status: ok`, `privyAgentDelegation: true`, an available blockhash, and a successful v0 simulation probe. No secret or wallet key is stored in this file, Git, or browser configuration. This block remains short of `complete` until the owner grants the one-time wallet delegation in Flay and one owner-authorized mainnet smoke transaction confirms the complete configured Privy boundary.
 
+## Active plan: x402 credential validation feedback
+
+**Status:** implementation in progress
+**Date:** 2026-10-13
+**Incident:** selecting x402 without an allowed HTTPS origin correctly returns a structured validation error, but the Agent UI discards the field detail and shows only `Some submitted fields are invalid.`
+
+### Implementation plan
+
+1. Read structured API validation details and display the first actionable field message instead of the generic wrapper message.
+2. Validate the x402-specific required origin, method, positive six-decimal limits, and daily-versus-payment relationship before calling the credential endpoint.
+3. Add focused tests, run the complete build/test and release audit, compare the implementation with this plan, deploy, and verify production.
+
+### Acceptance criteria
+
+1. Selecting x402 with no origin explains that an allowed HTTPS origin is required without creating a server request.
+2. Invalid origin and x402 limit relationships produce a precise actionable message.
+3. Structured server validation remains a fallback and exposes its first field error instead of the generic message.
+4. Valid credential creation and every existing Agent/x402 behavior remain unchanged.
+
+Do not mark this fix complete until all implementation items and acceptance criteria are evidenced below.
+
 ## Active plan: x402 machine-native Agent payments
 
 **Status:** complete
