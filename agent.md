@@ -359,7 +359,7 @@ All five implementation items and all five acceptance criteria are satisfied.
 
 ## Active plan: Agent capability creation recovery
 
-**Status:** implementation in progress
+**Status:** deployed; owner-wallet verification pending
 **Date:** 2026-10-12
 
 ### Incident
@@ -385,3 +385,7 @@ On mobile production, creating a `Full access` Agent capability remains on `Crea
 6. Always ask capability creation and all existing Agent authority restrictions remain unchanged.
 
 Do not mark this block complete until the deployed Full access creation path no longer spins indefinitely and the plan-versus-code audit is recorded below.
+
+### Deployed verification status
+
+The implementation is committed as `aefe1e5` and Railway deployment `f53b7326-8b85-4919-b50e-0b40d56f9f76` is live. The focused delegation and signer tests pass, the full production build passes with 54 test files and 329 tests, the release audit passes, and production health reports `status: ok` with `privyAgentDelegation: true`. The served browser bundle contains the new bounded `Authorizing Full access` flow, and the deployment's verification window contains no application errors or HTTP responses at or above 400. The affected Privy wallet was confirmed as not delegated before deployment, so the final acceptance check must be triggered by its owner in the browser; this block remains open until that retry returns the one-time capability or exposes a new bounded error.
