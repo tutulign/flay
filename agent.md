@@ -609,7 +609,7 @@ All five implementation items and all five acceptance criteria are satisfied.
 
 ## Active plan: Agent capability creation recovery
 
-**Status:** deployed; owner-wallet verification pending
+**Status:** complete
 **Date:** 2026-10-12
 
 ### Incident
@@ -642,7 +642,7 @@ The implementation is committed as `aefe1e5` and Railway deployment `f53b7326-8b
 
 ## Active plan: x402 production DNS compatibility repair
 
-**Status:** in progress
+**Status:** deployed; final owner-authorized paid revalidation pending
 **Date:** 2026-10-13
 
 ### Incident
@@ -678,3 +678,23 @@ Additional acceptance criteria:
 
 5. A confirmed settlement can never be reported as `fundsMoved: false` merely because the paid resource body exceeds Flay's release limit.
 6. Oversized content stays bounded to 64 KiB and is explicitly marked as truncated; an oversized 402 challenge still fails before signing or settlement.
+
+### Agent capability creation recovery completion audit
+
+The owner retried the deployed Full access flow successfully and received a one-time capability twice without the previous indefinite spinner. MCP authenticated the replacement capability and returned `approvalMode: automatic`, `status: active`, the delegated wallet, and its exact guardrails. This directly satisfies the outstanding owner-wallet acceptance check. The focused browser-delegation/signer coverage, complete build, release audit, server-side wallet delegation check, and bounded provider-call behavior recorded above remain unchanged. All six acceptance criteria for the Agent capability creation recovery are satisfied.
+
+### x402 DNS and settlement-accounting audit
+
+#### Implementation items
+
+1. **Current Node DNS contract — pass.** `SafeX402HttpTransport` now returns the complete validated pinned address array when Node requests `all: true` and the first validated address for the legacy callback contract. The live unsigned probe reads HTTP 402 plus `PAYMENT-REQUIRED` from `x402engine.app` instead of failing with `ERR_INVALID_IP_ADDRESS`.
+2. **SSRF boundary preservation — pass.** Resolution still happens once through the bounded resolver, every returned address must be public, and the HTTPS request receives only that validated array. Existing IP, mixed-answer, redirect, credential, port, body, and header-isolation protections remain unchanged and green.
+3. **Regression coverage — pass.** The transport test invokes both callback shapes. It also proves a response larger than 64 KiB returns exactly a 64 KiB prefix with `bodyTruncated: true`.
+4. **Truthful settlement accounting — pass in code and tests.** Oversized initial challenges fail before the payment builder. After a valid successful settlement receipt, an oversized paid body skips whole-JSON parsing, remains bounded, carries `bodyTruncated: true`, and returns a confirmed execution with the settlement signature. The Agent service therefore completes the request and reports funds moved instead of converting a confirmed payment into a transport failure.
+5. **Verification and deployment — pass.** `npm run check` passed the production build plus 60 test files and 370 tests, with 4 files and 8 credential/mainnet-gated tests skipped. The x402-focused run passed 42 tests. `npm run release:audit` passed 246 browser bundles; `npm audit --omit=dev --audit-level=high` exited successfully with only the existing three low-severity transitive MagicBlock findings; `git diff --check` passed. Commits `8f12176` and `0cdc266` are pushed. Railway deployment `c1bdd571-9050-45e2-a912-13d50a1e4d38` is healthy with `x402Payer: true`.
+
+#### Live payment evidence and remaining gate
+
+The single owner-authorized production request transferred exactly 1,000 atomic canonical USDC (0.001 USDC) from `FexVX…nLMc7` to the challenged recipient. Solana finalized transaction `4WDeS9gzJC3wcunMH2Nkh4DBeSBwqfFrSrQXpqcxxUokz7E4oZ6oaWRXbSSjGSJPGn1QcDCSPaHRQJP5W86kUxqg` at slot `456228931` with no error. Its decoded instruction is one `transferChecked` for canonical mainnet USDC, amount `1000`, decimals `6`; the resource facilitator paid the network fee. A replay using the same finalized signed transaction and idempotency key returned a fresh HTTP 402 and created no second on-chain transfer.
+
+That live request ran before the settlement-accounting deployment and exposed the oversized-body bug after settlement. The corrected production build is live, but another paid request has not been made because the owner's authorization covered exactly one payment and the deployment restart invalidated the in-memory capability. The repair remains short of its final live post-fix acceptance check until the owner explicitly authorizes a second 0.001 USDC payment and provides a newly issued capability. No further payment is implied by the first authorization.
