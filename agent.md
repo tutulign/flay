@@ -2,7 +2,7 @@
 
 ## Active plan: autonomous Phoenix session for Full access agents
 
-**Status:** in progress
+**Status:** complete
 **Date:** 2026-10-12
 **Scope:** allow a policy-authorized Full access capability to establish Phoenix's short-lived API session through Flay's existing delegated Privy signer so Phoenix Futures actions can be prepared and executed without a browser login step
 
@@ -26,6 +26,25 @@
 ### Completion rule
 
 Do not declare this block complete until the deployed MCP completes the specified Phoenix trade or reports a truthful external provider/funding constraint after all Flay-controlled implementation work is finished. No automated test may submit a real transaction.
+
+## Autonomous Phoenix session for Full access agents audit
+
+**Status:** complete
+**Date:** 2026-10-12
+
+### Plan-to-code comparison
+
+1. **Delegated Phoenix session renewal — pass.** Before an automatic Phoenix prepare, `AgentService` reuses a current Phoenix session or requests the provider's wallet challenge, signs it through the credential-bound delegated Privy wallet, submits the proof through the existing Phoenix login verifier, and then prepares the order. The user does not need a browser login for session renewal.
+2. **Guardrail ordering and venue isolation — pass.** Capability authentication, product and market allowlists, amount, daily value, slippage, leverage, open-position limits, live portfolio state, and executable route selection run before renewal. Only a selected Phoenix route performs this step; focused coverage proves an explicit GMTrade route never invokes Phoenix authentication. Always ask continues through the browser review path.
+3. **Challenge security — pass.** The existing Phoenix verifier requires the exact wallet as fee payer and sole signer, one bounded memo instruction from an allowed memo program, the exact server-issued nonce and wallet, a valid timestamp and blockhash, unmodified serialized message bytes, a nonexpired challenge, and a valid wallet signature. The challenge, signature, delegated wallet ID, Privy identity, authorization key, and MCP credential are not returned by MCP or logged.
+4. **Safe retries and failures — pass.** Existing sessions avoid extra signatures. New proofs use challenge-specific Privy idempotency keys, capability status is rechecked immediately before and after the challenge signature, provider failures keep the request pending without preparing or submitting an order, and the existing automatic-execution lock prevents duplicate signing or broadcast.
+5. **Repository verification — pass.** The focused Agent, MCP, delegated-signer, Phoenix authentication, and Phoenix transaction-validation suites passed 52 tests. The complete check passed 343 tests with 8 explicitly gated skips, TypeScript and the production build passed, the release audit scanned 246 browser bundle files, diff and credential scans passed, and the dependency audit retained only the three documented low-severity MagicBlock transitive findings.
+6. **Deployment and authorized mainnet trade — pass.** Commit `f96d424` is deployed in Railway deployment `f0deb948-a033-49c4-a122-bfeb5cc2200a`, whose live health endpoint returns `ok`. A fresh Full access MCP capability then submitted the wallet-owner-authorized Phoenix `SOL-PERP` market short with 1 USDC collateral, requested 3× leverage, and 0.50% maximum slippage without browser review. Request `8efc4722-6dd5-4712-a28e-170a58b7cf2e` completed with no failure. Transaction `37z96PuvUdiDrxdWcHHk913c6JV8Tcgvr51yYZVJYwvsMcCr7tKKiD7jHHfKUK4qNpD6bUhLruQLq7RQQ4ug724V` finalized at slot 456,134,840 with no onchain error, and the MCP status tool independently returned `finalized`.
+7. **Venue result — pass.** Phoenix's post-trade state reports an isolated SOL short of 2 base lots, equal to 0.02 SOL at the market's two-decimal lot precision, with a $107.85 entry and 999,245 atomic USDC remaining in the isolated subaccount after fees. Its opening notional is approximately $2.157; Phoenix safely rounded down from the requested 3× target because another 0.01 SOL lot would exceed the leverage cap.
+
+### Acceptance-criteria result
+
+All five acceptance criteria pass. Full access can now renew Phoenix authentication and complete a policy-bounded Futures order through the delegated exact Privy wallet while retaining Flay's challenge validation, transaction semantics, simulation, message integrity, venue isolation, revocation checks, and MCP lifecycle evidence.
 
 ## Active plan: Privy TEE Full access provisioning
 
