@@ -67,6 +67,17 @@ describe('Privy delegated Agent signer', () => {
     expect(mocks.signTransaction).not.toHaveBeenCalled();
   });
 
+  it('rechecks the exact authorization signer before every signing operation', async () => {
+    const signer = new PrivyAgentDelegatedSigner({ appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key', authorizationKeyId: 'signer-id' });
+    mocks.getWallet.mockResolvedValueOnce({
+      id: 'wallet-id', address: SOL_MINT, chain_type: 'solana',
+      additional_signers: [{ signer_id: 'another-signer', override_policy_ids: [] }],
+    });
+    await expect(signer.signTransaction('wallet-id', SOL_MINT, 'transaction', 'request-id'))
+      .rejects.toMatchObject({ code: 'AGENT_WALLET_NOT_DELEGATED' });
+    expect(mocks.signTransaction).not.toHaveBeenCalled();
+  });
+
   it('passes the server authorization key internally and returns only provider results', async () => {
     const signer = new PrivyAgentDelegatedSigner({ appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key', authorizationKeyId: 'signer-id' });
     await expect(signer.signTransaction('wallet-id', SOL_MINT, 'transaction', 'request-id')).resolves.toBe('signed-base64');

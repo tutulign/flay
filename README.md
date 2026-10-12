@@ -127,15 +127,18 @@ The MCP catalog is intentionally small:
 
 | Tool | Authority |
 | --- | --- |
-| `flay_get_tokens` | Read bounded public Solana token metadata |
-| `flay_get_stocks` | Read a bounded page of the public xStocks catalog |
+| `flay_get_capability` | Read this credential's real approval mode, wallet, guardrails, allowlists, and expiry |
+| `flay_list_requests` | Read bounded recent lifecycle records created by this exact credential |
+| `flay_get_request_status` | Read one owned request, failure or execution evidence, and fresh Solana confirmation status |
+| `flay_get_tokens` | Read bounded verified, tradable Solana token metadata with canonical matches ranked first |
+| `flay_get_stocks` | Read a bounded page of the complete official Solana xStocks catalog |
 | `flay_get_futures_markets` | Read normalized public Phoenix and GMTrade market data |
 | `flay_request_convert` | Submit a policy-checked Convert intent under the credential's approval mode |
 | `flay_request_stock_trade` | Submit a policy-checked xStocks intent under the credential's approval mode |
 | `flay_request_futures_open` | Submit a policy-checked Futures open intent under the credential's approval mode |
 | `flay_request_futures_manage` | Submit a policy-checked Futures close or cancel intent under the credential's approval mode |
 
-Trading tools require a UUID idempotency key. For `Always ask`, they return the queued request and state that human approval is required. For automatic capabilities, the same call returns the completed or retryable execution state and transaction evidence; concurrent retries with the same key are coalesced and cannot sign or submit twice. There are no MCP tools for fiat funding, wallet sends, raw signing, arbitrary transaction submission, key export, policy mutation, or arbitrary program instructions.
+Trading tools require a UUID idempotency key. Agents should call `flay_get_capability` before trading and trust its `approvalMode`: `Always ask` queues the request for user review, while `automatic` executes within the delegated guardrails without per-request UI approval. `flay_list_requests` and `flay_get_request_status` expose only that credential's records, including failure details, provider transaction evidence, and live onchain confirmation. Concurrent retries with the same key are coalesced and cannot sign or submit twice. There are no MCP tools for fiat funding, wallet sends, raw signing, arbitrary transaction submission, key export, policy mutation, or arbitrary program instructions.
 
 ## Technology
 

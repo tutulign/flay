@@ -80,6 +80,18 @@ describe('StockService trust boundary', () => {
     }
   });
 
+  it('waits for the complete official directory when an agent requests discovery', async () => {
+    const provider = mockProviders();
+    vi.stubGlobal('fetch', provider);
+    const { service } = services();
+
+    const catalog = await service.completeCatalog();
+
+    expect(catalog).toMatchObject({ status: 'live', directoryComplete: true, warning: null });
+    expect(catalog.assets).toHaveLength(1);
+    expect(provider.mock.calls.some(([input]) => new URL(input instanceof Request ? input.url : input.toString()).pathname.endsWith('/public/assets'))).toBe(true);
+  });
+
   it('does not double a failed initial catalog request with an automatic retry', async () => {
     const timeout = Object.assign(new Error('slow provider'), { name: 'AbortError' });
     const provider = vi.fn().mockRejectedValue(timeout);

@@ -5,14 +5,30 @@ import { TokenService } from './tokens.js';
 afterEach(() => vi.unstubAllGlobals());
 
 describe('core token metadata', () => {
-  it('returns fixed SOL, USDC, and JUP metadata without a Jupiter request', async () => {
-    const providerFetch = vi.fn();
+  it('keeps canonical metadata while hydrating missing SOL and JUP prices in one live request', async () => {
+    const providerFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      expect(url.pathname).toBe('/price/v3');
+      expect(new Set((url.searchParams.get('ids') ?? '').split(','))).toEqual(new Set([SOL_MINT, JUP_MINT]));
+      return new Response(JSON.stringify({
+        [SOL_MINT]: { usdPrice: 110.25 },
+        [JUP_MINT]: { usdPrice: 0.52 },
+      }), { status: 200 });
+    });
     vi.stubGlobal('fetch', providerFetch);
     const service = new TokenService();
     const tokens = await Promise.all([SOL_MINT, USDC_MINT, JUP_MINT].map((mint) => service.getByMint(mint)));
     expect(tokens.map((token) => token.symbol)).toEqual(['SOL', 'USDC', 'JUP']);
     expect(tokens.map((token) => token.decimals)).toEqual([9, 6, 6]);
-    expect(providerFetch).not.toHaveBeenCalled();
+    expect(tokens.map((token) => token.usdPrice)).toEqual([110.25, 1, 0.52]);
+    expect(tokens.every((token) => token.verified && token.tradable)).toBe(true);
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed with canonical identity intact when live core pricing is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')));
+    const token = await new TokenService().getByMint(SOL_MINT);
+    expect(token).toMatchObject({ mint: SOL_MINT, symbol: 'SOL', verified: true, tradable: true, usdPrice: null });
   });
 });
 

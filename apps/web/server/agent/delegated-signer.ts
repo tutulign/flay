@@ -68,7 +68,7 @@ export class PrivyAgentDelegatedSigner implements AgentDelegatedSigner {
 
   async signTransaction(walletId: string, wallet: string, transaction: string, idempotencyKey: string): Promise<string> {
     const client = this.requireClient();
-    await this.assertWallet(walletId, wallet);
+    await this.assertWallet(walletId, wallet, true);
     try {
       const result = await this.withTimeout(
         client.wallets().solana().signTransaction(walletId, {
@@ -90,7 +90,7 @@ export class PrivyAgentDelegatedSigner implements AgentDelegatedSigner {
 
   async signAndSendSponsored(walletId: string, wallet: string, transaction: string, idempotencyKey: string): Promise<string> {
     const client = this.requireClient();
-    await this.assertWallet(walletId, wallet);
+    await this.assertWallet(walletId, wallet, true);
     try {
       const result = await this.withTimeout(
         client.wallets().solana().signAndSendTransaction(walletId, {

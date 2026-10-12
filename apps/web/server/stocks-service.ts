@@ -186,6 +186,18 @@ export class StockService {
     }
   }
 
+  async completeCatalog(): Promise<StockCatalogResponse> {
+    const cached = this.catalogCache;
+    if (cached?.directoryComplete && cached.expiresAt > Date.now()) {
+      return this.catalogResponse(cached, 'live', null);
+    }
+    const loaded = await this.loadCatalogCoalesced();
+    if (!loaded.directoryComplete) {
+      throw new AppError(503, 'XSTOCKS_DIRECTORY_INCOMPLETE', 'The complete official xStocks directory is not available yet. Retry shortly.', true);
+    }
+    return this.catalogResponse(loaded, 'live', null);
+  }
+
   async detail(symbolInput: string, requireFresh = false): Promise<StockAsset> {
     const symbol = canonicalSymbol(symbolInput);
     const catalog = await this.catalog(requireFresh);

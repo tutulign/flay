@@ -3,10 +3,12 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import type { Request, Response, Router } from 'express';
 import { z } from 'zod';
 import type { AgentIntentSubmission, AgentRequest } from '../../shared/agent.js';
+import { CORE_TOKEN_MINTS } from '../../shared/constants.js';
 import { asAppError } from '../errors.js';
 import type { FuturesService } from '../futures/futures-service.js';
 import type { StockService } from '../stocks-service.js';
 import type { TokenService } from '../tokens.js';
+import type { TokenInfo } from '../../shared/types.js';
 import type { AgentService } from './service.js';
 import { agentRequestOutcome } from './outcome.js';
 import {
@@ -74,22 +76,115 @@ function safeToolError(error: unknown): CallToolResult {
 export function agentRequestResult(request: AgentRequest): CallToolResult {
   return safeResult({
     ok: true,
-    request: {
-      id: request.id,
-      status: request.status,
-      kind: request.intent.kind,
-      riskMicroUsd: request.riskUsd,
-      createdAt: request.createdAt,
-      expiresAt: request.expiresAt,
-      approvalMode: request.approvalMode,
-      failure: request.failure,
-      execution: request.execution,
-    },
+    request: publicAgentRequest(request),
     ...agentRequestOutcome(request),
   });
 }
 
-function registerReadTools(server: McpServer, dependencies: McpDependencies) {
+function publicAgentRequest(request: AgentRequest) {
+  return {
+    id: request.id,
+    status: request.status,
+    kind: request.intent.kind,
+    intent: request.intent,
+    riskMicroUsd: request.riskUsd,
+    createdAt: request.createdAt,
+    expiresAt: request.expiresAt,
+    approvalMode: request.approvalMode,
+    failure: request.failure,
+    execution: request.execution,
+  };
+}
+
+export function selectAgentTokens(tokens: TokenInfo[], query: string): TokenInfo[] {
+  const coreRank = new Map<string, number>(CORE_TOKEN_MINTS.map((mint, index) => [mint, index]));
+  const exactSymbol = query.trim().toUpperCase();
+  const eligible = tokens
+    .filter((token) => token.verified && token.tradable)
+    .sort((left, right) => {
+      const leftExact = left.symbol.toUpperCase() === exactSymbol ? 1 : 0;
+      const rightExact = right.symbol.toUpperCase() === exactSymbol ? 1 : 0;
+      if (leftExact !== rightExact) return rightExact - leftExact;
+      return (coreRank.get(left.mint) ?? Number.MAX_SAFE_INTEGER) - (coreRank.get(right.mint) ?? Number.MAX_SAFE_INTEGER);
+    });
+  return [...new Map(eligible.map((token) => [token.mint, token])).values()].slice(0, 20);
+}
+
+function registerReadTools(server: McpServer, dependencies: McpDependencies, credential: string) {
+  server.registerTool('flay_get_capability', {
+    title: 'Inspect this Flay capability',
+    description: 'Return the authenticated credential’s actual approval mode, wallet, product access, limits, allowlists, and expiry. Use this before proposing a trade to distinguish Full access from Always ask.',
+    inputSchema: z.object({}).strict(),
+    annotations: readOnlyAnnotations,
+  }, async () => {
+    try {
+      const capability = dependencies.agents.capability(credential);
+      return safeResult({
+        ok: true,
+        capability: {
+          id: capability.id,
+          name: capability.name,
+          wallet: capability.wallet,
+          approvalMode: capability.approvalMode,
+          status: capability.status,
+          products: capability.products,
+          maxTransactionUsd: capability.maxTransactionUsd,
+          maxDailyUsd: capability.maxDailyUsd,
+          maxSlippageBps: capability.maxSlippageBps,
+          maxFuturesLeverage: capability.maxFuturesLeverage,
+          maxOpenFuturesPositions: capability.maxOpenFuturesPositions,
+          allowedTokenMints: capability.allowedTokenMints,
+          allowedStockSymbols: capability.allowedStockSymbols,
+          allowedFuturesMarkets: capability.allowedFuturesMarkets,
+          createdAt: capability.createdAt,
+          expiresAt: capability.expiresAt,
+        },
+        executionBehavior: capability.approvalMode === 'automatic'
+          ? 'Full access: Flay executes policy-compliant requests with the delegated wallet signer; no per-request UI approval is required.'
+          : 'Always ask: each request waits for the wallet owner to review and approve it in Flay.',
+      });
+    } catch (error) {
+      return safeToolError(error);
+    }
+  });
+
+  server.registerTool('flay_list_requests', {
+    title: 'List this capability’s Flay requests',
+    description: 'List recent requests created by this exact capability, including status, failure, transaction signature, provider, and Explorer URL when available. It cannot read another capability’s requests.',
+    inputSchema: z.object({
+      limit: z.number().int().min(1).max(50).default(20),
+    }).strict(),
+    annotations: readOnlyAnnotations,
+  }, async ({ limit }) => {
+    try {
+      const requests = dependencies.agents.recentRequests(credential, limit);
+      return safeResult({ ok: true, count: requests.length, requests: requests.map(publicAgentRequest) });
+    } catch (error) {
+      return safeToolError(error);
+    }
+  });
+
+  server.registerTool('flay_get_request_status', {
+    title: 'Check one Flay request',
+    description: 'Return one request owned by this exact capability, its failure or execution evidence, and a fresh Solana confirmation lookup when a transaction signature exists.',
+    inputSchema: z.object({
+      requestId: z.string().uuid().describe('The Flay request UUID returned by a trading tool.'),
+    }).strict(),
+    annotations: readOnlyAnnotations,
+  }, async ({ requestId }) => {
+    try {
+      const status = await dependencies.agents.requestStatus(credential, requestId);
+      return safeResult({
+        ok: true,
+        request: publicAgentRequest(status.request),
+        confirmation: status.confirmation,
+        ...agentRequestOutcome(status.request),
+      });
+    } catch (error) {
+      return safeToolError(error);
+    }
+  });
+
   server.registerTool('flay_get_tokens', {
     title: 'Search Flay tokens',
     description: 'Search verified Solana token metadata before constructing a Convert proposal. Returns at most 20 results. This tool never reads a wallet or moves funds.',
@@ -99,7 +194,7 @@ function registerReadTools(server: McpServer, dependencies: McpDependencies) {
     annotations: readOnlyAnnotations,
   }, async ({ query }) => {
     try {
-      const tokens = (await dependencies.tokens.search(query)).slice(0, 20).map((token) => ({
+      const tokens = selectAgentTokens(await dependencies.tokens.search(query), query).map((token) => ({
         mint: token.mint,
         symbol: token.symbol,
         name: token.name,
@@ -127,7 +222,7 @@ function registerReadTools(server: McpServer, dependencies: McpDependencies) {
     annotations: readOnlyAnnotations,
   }, async ({ query, offset, limit }) => {
     try {
-      const catalog = await dependencies.stocks.catalog();
+      const catalog = await dependencies.stocks.completeCatalog();
       const needle = query?.toUpperCase();
       const matches = needle
         ? catalog.assets.filter((asset) => `${asset.symbol} ${asset.underlyingSymbol} ${asset.name}`.toUpperCase().includes(needle))
@@ -270,7 +365,7 @@ function registerTradingTools(server: McpServer, dependencies: McpDependencies, 
 
 function createFlayMcpServer(dependencies: McpDependencies, credential: string) {
   const server = new McpServer({ name: 'flay', version: '1.0.0' });
-  registerReadTools(server, dependencies);
+  registerReadTools(server, dependencies, credential);
   registerTradingTools(server, dependencies, credential);
   return server;
 }

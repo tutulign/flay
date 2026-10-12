@@ -10,6 +10,16 @@ import { AppError } from '../errors.js';
 import { AgentService } from './service.js';
 import type { AgentDelegatedSigner } from './delegated-signer.js';
 
+const rpcMocks = vi.hoisted(() => ({
+  getSignatureStatuses: vi.fn().mockResolvedValue({
+    value: [{ slot: 123, confirmations: null, confirmationStatus: 'finalized', err: null }],
+  }),
+}));
+
+vi.mock('../rpc.js', () => ({
+  withRpcFallback: vi.fn(async (operation: (rpc: typeof rpcMocks) => unknown) => operation(rpcMocks)),
+}));
+
 function service() {
   const tokens = { getByMint: vi.fn().mockResolvedValue({ mint: USDC_MINT, decimals: 6, usdPrice: 1, verified: true, tradable: true }) };
   const agents = new AgentService(
@@ -173,10 +183,18 @@ function automaticHarness(options: { sponsored?: boolean; signGate?: Promise<voi
 describe('automatic Agent execution', () => {
   it('signs and completes an exact normal provider transaction without UI approval', async () => {
     const { agents, created, quotes, signer } = automaticHarness();
+    expect(agents.capability(created.credential)).toMatchObject({ approvalMode: 'automatic', products: ['convert'] });
     const request = await agents.submit(created.credential, { idempotencyKey: crypto.randomUUID(), intent: convert('1000000') });
     expect(request).toMatchObject({ status: 'completed', approvalMode: 'automatic', execution: { signature: 'automatic-signature', provider: 'Jupiter' } });
     expect(signer.signTransaction).toHaveBeenCalledWith('delegated-wallet-id', SOL_MINT, 'unsigned-transaction', expect.stringMatching(/^agent-sign-/));
     expect(quotes.execute).toHaveBeenCalledWith('prepared-auto', 'signed-transaction');
+
+    const status = await agents.requestStatus(created.credential, request.id);
+    expect(status).toMatchObject({
+      request: { status: 'completed', execution: { signature: 'automatic-signature' } },
+      confirmation: { status: 'finalized', slot: 123, error: null },
+    });
+    expect(rpcMocks.getSignatureStatuses).toHaveBeenCalledWith(['automatic-signature'], { searchTransactionHistory: true });
   });
 
   it('uses Privy sponsored broadcast and the existing receipt verifier for eligible routes', async () => {

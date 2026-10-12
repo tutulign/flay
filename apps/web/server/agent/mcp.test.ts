@@ -3,9 +3,10 @@ import express from 'express';
 import request from 'supertest';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { SOL_MINT, USDC_MINT } from '../../shared/constants.js';
+import { JUP_MINT, SOL_MINT, USDC_MINT } from '../../shared/constants.js';
 import type { AgentRequest } from '../../shared/agent.js';
-import { agentRequestResult } from './mcp.js';
+import type { TokenInfo } from '../../shared/types.js';
+import { agentRequestResult, selectAgentTokens } from './mcp.js';
 
 vi.mock('@privy-io/node', () => ({
   verifyIdentityToken: vi.fn().mockResolvedValue({
@@ -38,9 +39,12 @@ const initialize = {
   params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'flay-test', version: '1.0.0' } },
 };
 const expectedTools = [
+  'flay_get_capability',
   'flay_get_futures_markets',
+  'flay_get_request_status',
   'flay_get_stocks',
   'flay_get_tokens',
+  'flay_list_requests',
   'flay_request_convert',
   'flay_request_futures_manage',
   'flay_request_futures_open',
@@ -85,6 +89,20 @@ async function connect(credential: string) {
 }
 
 describe('Flay Streamable HTTP MCP', () => {
+  it('excludes unverified or blocked token lookalikes and ranks canonical USDC first', () => {
+    const token = (input: Partial<TokenInfo> & Pick<TokenInfo, 'mint' | 'symbol'>): TokenInfo => ({
+      name: input.symbol, decimals: 6, logoUri: null, tokenProgram: 'spl-token', verified: true,
+      tags: [], extensions: [], tradable: true, blockedReason: null, usdPrice: 1, ...input,
+    });
+    const selected = selectAgentTokens([
+      token({ mint: JUP_MINT, symbol: 'USDC' }),
+      token({ mint: SOL_MINT, symbol: 'USDC', verified: false }),
+      token({ mint: USDC_MINT, symbol: 'USDC' }),
+      token({ mint: 'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp', symbol: 'USDC', tradable: false, blockedReason: 'blocked' }),
+    ], 'USDC');
+    expect(selected.map((item) => item.mint)).toEqual([USDC_MINT, JUP_MINT]);
+  });
+
   it('reports the owner-selected approval mode and actual automatic execution outcome', () => {
     const result = agentRequestResult({
       id: 'request-id', credentialId: 'credential-id', credentialName: 'Auto', wallet: SOL_MINT,
@@ -116,6 +134,12 @@ describe('Flay Streamable HTTP MCP', () => {
       expect(JSON.stringify(catalog)).not.toContain(credential);
       expect(catalog.tools.every((tool) => !/(fiat|send|transfer|sign|export|key|transaction)/i.test(tool.name))).toBe(true);
 
+      const capability = await client.callTool({ name: 'flay_get_capability', arguments: {} });
+      expect(capability.structuredContent).toMatchObject({
+        ok: true,
+        capability: { approvalMode: 'always-ask', wallet: SOL_MINT, products: ['futures'] },
+      });
+
       const tokenResult = await client.callTool({ name: 'flay_get_tokens', arguments: { query: USDC_MINT } });
       expect(tokenResult.isError).not.toBe(true);
       expect(tokenResult.structuredContent).toMatchObject({
@@ -137,6 +161,17 @@ describe('Flay Streamable HTTP MCP', () => {
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toMatchObject({ ok: true, fundsMoved: false, humanApprovalRequired: true, request: { status: 'pending', kind: 'futures-manage' } });
       expect(JSON.stringify(result)).not.toContain(credential);
+      const requestId = (result.structuredContent as { request: { id: string } }).request.id;
+
+      const status = await client.callTool({ name: 'flay_get_request_status', arguments: { requestId } });
+      expect(status.structuredContent).toMatchObject({
+        ok: true,
+        request: { id: requestId, status: 'pending', execution: null },
+        confirmation: { status: 'not-submitted' },
+        humanApprovalRequired: true,
+      });
+      const recent = await client.callTool({ name: 'flay_list_requests', arguments: { limit: 5 } });
+      expect(recent.structuredContent).toMatchObject({ ok: true, count: 1, requests: [{ id: requestId, status: 'pending' }] });
 
       const workspace = await request(app).get(`/api/agent/workspace?wallet=${SOL_MINT}`).set(identity).expect(200);
       expect(workspace.body.requests.some((item: { intent: { kind: string } }) => item.intent.kind === 'futures-manage')).toBe(true);
@@ -163,6 +198,10 @@ describe('Flay Streamable HTTP MCP', () => {
       expect(allowed.isError).not.toBe(true);
       expect(denied.isError).toBe(true);
       expect(denied.structuredContent).toMatchObject({ ok: false, error: { code: 'AGENT_PRODUCT_DENIED' } });
+      const allowedId = (allowed.structuredContent as { request: { id: string } }).request.id;
+      const hidden = await convertClient.callTool({ name: 'flay_get_request_status', arguments: { requestId: allowedId } });
+      expect(hidden.isError).toBe(true);
+      expect(hidden.structuredContent).toMatchObject({ ok: false, error: { code: 'AGENT_REQUEST_NOT_FOUND' } });
     } finally {
       await Promise.all([futuresClient.close(), convertClient.close()]);
     }

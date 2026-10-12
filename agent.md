@@ -4,7 +4,7 @@
 
 **Status:** in progress
 **Date:** 2026-10-12
-**Scope:** repair Full access credential creation for Privy TEE/unified Solana wallets by provisioning and verifying Flay's exact authorization-key signer
+**Scope:** repair Full access credential creation and production MCP execution for Privy TEE/unified Solana wallets by provisioning and verifying Flay's exact authorization-key signer, exposing capability/request outcomes, and removing provider-data inconsistencies that block guarded execution
 
 ### Implementation plan
 
@@ -14,6 +14,10 @@
 4. Add the public signer-ID configuration to the environment example, Railway configuration, and Docker/Vite build arguments so the deployed browser bundle receives it; keep the authorization private key server-only.
 5. Add focused client and server tests for TEE signer provisioning, timeout behavior, exact-signer verification, mismatch denial, and unchanged legacy behavior.
 6. Update the README, run the complete checks and security scans, deploy, verify production readiness, and compare every result with this plan before marking it complete.
+7. Add MCP read tools that report the authenticated capability's real approval mode and policy boundary, list its own recent requests, and return one request's status, failure, transaction signature, Explorer URL, and live onchain confirmation without exposing another credential's records.
+8. Hydrate canonical SOL/JUP exact-mint results with a live Jupiter USD price so guardrail valuation agrees with symbol search and SOL-input automatic Convert requests are not rejected solely because static core metadata has no price.
+9. Restrict MCP token discovery to verified, tradable assets, rank canonical exact-symbol matches first, and exclude unverified USDC lookalikes from agent discovery.
+10. Make MCP xStocks discovery await the bounded complete official Solana directory or return a clear retryable provider error instead of reporting a deliberately partial warm-up catalog as usable discovery.
 
 ### Acceptance criteria
 
@@ -23,6 +27,10 @@
 4. Older on-device wallets retain their supported delegated-actions path.
 5. The deployed browser bundle contains the configured public signer ID, while the app secret and authorization private key remain server-only and absent from tracked files and browser bundles.
 6. Existing Agent, MCP, Convert, Stocks, Futures, authentication, and funding checks remain passing in production.
+7. An MCP client can verify whether its credential is Full access or Always ask and can inspect only its own request lifecycle, failure, signature, Explorer link, and live Solana confirmation.
+8. Exact SOL mint lookup returns the same usable live-price class as SOL symbol lookup, allowing policy valuation for SOL-input conversions while still failing closed when no live price can be obtained.
+9. MCP token search never recommends unverified or blocked assets and returns canonical USDC ahead of any other verified symbol match.
+10. MCP stock discovery returns a complete official directory or an explicit retryable failure; it never labels the one-asset warm-up response as a completed discovery result.
 
 ### Completion rule
 

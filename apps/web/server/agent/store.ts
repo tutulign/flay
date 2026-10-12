@@ -149,6 +149,26 @@ export class AgentStore {
     return structuredClone(record.policy);
   }
 
+  summary(record: CredentialRecord): AgentCredentialSummary {
+    return publicCredential(record);
+  }
+
+  recentRequests(record: CredentialRecord, limit: number): AgentRequest[] {
+    return [...this.requests.values()]
+      .filter((candidate) => candidate.credentialId === record.id)
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .slice(0, limit)
+      .map(publicRequest);
+  }
+
+  capabilityRequest(record: CredentialRecord, id: string): AgentRequest {
+    const request = this.requests.get(id);
+    if (!request || request.credentialId !== record.id) {
+      throw new AppError(404, 'AGENT_REQUEST_NOT_FOUND', 'This capability has no request with that ID.');
+    }
+    return publicRequest(request);
+  }
+
   existingRequest(record: CredentialRecord, idempotencyKey: string, intent: AgentIntent): AgentRequest | null {
     const existing = [...this.requests.values()].find((candidate) => candidate.credentialId === record.id && candidate.idempotencyKey === idempotencyKey);
     if (!existing) return null;

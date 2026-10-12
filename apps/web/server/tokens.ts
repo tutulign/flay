@@ -26,6 +26,10 @@ interface JupiterToken {
   tags?: string[];
 }
 
+interface JupiterPrice {
+  usdPrice?: number;
+}
+
 const CORE_METADATA = new Map<string, JupiterToken>([
   [SOL_MINT, {
     id: SOL_MINT,
@@ -125,9 +129,15 @@ interface MetadataBatch {
   requests: Array<{ mints: string[]; resolve: (metadata: Map<string, JupiterToken>) => void }>;
 }
 
+interface PriceBatch {
+  mints: Set<string>;
+  requests: Array<{ mints: string[]; resolve: (prices: Map<string, number>) => void }>;
+}
+
 export class TokenService {
   private readonly cache = new Map<string, { expiresAt: number; token: TokenInfo }>();
   private metadataBatch: MetadataBatch | null = null;
+  private priceBatch: PriceBatch | null = null;
 
   async search(query: string): Promise<TokenInfo[]> {
     const trimmed = query.trim();
@@ -158,7 +168,13 @@ export class TokenService {
     const cached = this.cache.get(mint);
     if (cached && cached.expiresAt > Date.now()) return cached.token;
     const core = coreToken(mint);
-    if (core) return core;
+    if (core) {
+      if (core.usdPrice !== null) return core;
+      const price = (await this.fetchPrices([mint])).get(mint) ?? null;
+      const token = price === null ? core : { ...core, usdPrice: price };
+      this.cache.set(mint, { expiresAt: Date.now() + 30_000, token });
+      return token;
+    }
 
     let address: PublicKey;
     try {
@@ -301,6 +317,49 @@ export class TokenService {
       }
       unique.forEach((mint) => this.metadataBatch!.mints.add(mint));
       this.metadataBatch.requests.push({ mints: unique, resolve });
+    });
+  }
+
+  private fetchPrices(mints: string[]): Promise<Map<string, number>> {
+    const unique = [...new Set(mints)].slice(0, 100);
+    if (!unique.length) return Promise.resolve(new Map());
+    return new Promise((resolve) => {
+      if (!this.priceBatch) {
+        const batch: PriceBatch = { mints: new Set(), requests: [] };
+        this.priceBatch = batch;
+        setTimeout(() => void this.flushPrices(batch), 10);
+      }
+      unique.forEach((mint) => this.priceBatch!.mints.add(mint));
+      this.priceBatch.requests.push({ mints: unique, resolve });
+    });
+  }
+
+  private async flushPrices(batch: PriceBatch): Promise<void> {
+    if (this.priceBatch === batch) this.priceBatch = null;
+    const requested = [...batch.mints].slice(0, 100);
+    const url = new URL('/price/v3', config.jupiterBaseUrl);
+    url.searchParams.set('ids', requested.join(','));
+    let prices = new Map<string, number>();
+    try {
+      const payload = await fetchJson<Record<string, JupiterPrice>>(url, {
+        provider: 'Jupiter Price',
+        headers: providerHeaders(),
+        timeoutMs: config.requestTimeoutMs,
+        maxBytes: 500_000,
+      });
+      prices = new Map(Object.entries(payload).flatMap(([mint, row]) => (
+        typeof row?.usdPrice === 'number' && Number.isFinite(row.usdPrice) && row.usdPrice > 0
+          ? [[mint, row.usdPrice] as const]
+          : []
+      )));
+    } catch {
+      // Agent risk checks fail closed when the live canonical price is unavailable.
+    }
+    batch.requests.forEach((request) => {
+      request.resolve(new Map(request.mints.flatMap((mint) => {
+        const value = prices.get(mint);
+        return value === undefined ? [] : [[mint, value] as const];
+      })));
     });
   }
 

@@ -8,6 +8,7 @@ import { prepareRankedMarketRoute } from '../market-route-fallback.js';
 import type { QuoteService } from '../quote-service.js';
 import type { StockService } from '../stocks-service.js';
 import type { TokenService } from '../tokens.js';
+import { withRpcFallback } from '../rpc.js';
 import { PrivyAgentDelegatedSigner, type AgentDelegatedSigner } from './delegated-signer.js';
 import { AgentStore, type AgentCredentialRecord, type AgentRequestRecord } from './store.js';
 
@@ -95,6 +96,60 @@ export class AgentService {
       expiresAt: credential.expiresAt,
       products: [...credential.products],
     };
+  }
+
+  capability(rawCredential: string | undefined) {
+    const credential = this.store.authenticate(rawCredential, false);
+    return this.store.summary(credential);
+  }
+
+  recentRequests(rawCredential: string | undefined, limit: number) {
+    const credential = this.store.authenticate(rawCredential, false);
+    return this.store.recentRequests(credential, limit);
+  }
+
+  async requestStatus(rawCredential: string | undefined, id: string) {
+    const credential = this.store.authenticate(rawCredential, false);
+    const request = this.store.capabilityRequest(credential, id);
+    const signature = request.execution?.signature;
+    if (!signature) {
+      return {
+        request,
+        confirmation: { status: 'not-submitted' as const, checkedAt: Date.now() },
+      };
+    }
+    try {
+      const response = await withRpcFallback((rpc) => rpc.getSignatureStatuses([signature], { searchTransactionHistory: true }));
+      const current = response.value[0];
+      if (!current) {
+        return {
+          request,
+          confirmation: { status: 'not-found' as const, checkedAt: Date.now() },
+        };
+      }
+      return {
+        request,
+        confirmation: {
+          status: current.err
+            ? 'failed' as const
+            : current.confirmationStatus ?? 'processed' as const,
+          slot: current.slot,
+          confirmations: current.confirmations,
+          error: current.err ?? null,
+          checkedAt: Date.now(),
+        },
+      };
+    } catch (error) {
+      const appError = asAppError(error, 'SOLANA_STATUS_UNAVAILABLE');
+      return {
+        request,
+        confirmation: {
+          status: 'unavailable' as const,
+          detail: appError.message,
+          checkedAt: Date.now(),
+        },
+      };
+    }
   }
 
   async submit(rawCredential: string | undefined, submission: AgentIntentSubmission) {
