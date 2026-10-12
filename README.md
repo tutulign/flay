@@ -60,7 +60,7 @@ Futures candles are stable reference data rendered with TradingView Lightweight 
 - Provider secrets, identity tokens, signed transaction bytes, and private RPC credentials stay out of browser bundles and logs.
 - A provider outage disables affected new actions while preserving visible balances, positions, and recovery controls where cached state is available.
 - AI agent credentials are stored as SHA-256 hashes, expire automatically, and accept only bounded structured intents. The approval mode is immutable per credential. Agents never receive Privy signing access, wallet IDs, transaction bytes, identity tokens, fiat funding, wallet export, general transfers, or arbitrary program calls.
-- x402 requests use explicit HTTPS-origin and method allowlists. Flay rejects IP literals, private or reserved DNS answers, redirects, credentials, custom ports, oversized bodies, and unsafe response types. POST bodies remain server-private and are represented by a SHA-256 digest during review.
+- x402 requests use explicit HTTPS-origin and method allowlists. Flay rejects IP literals, private or reserved DNS answers, redirects, credentials, custom ports, oversized payment challenges, and unsafe response types. POST bodies remain server-private and are represented by a SHA-256 digest during review. Paid responses are released up to 64 KiB; larger responses include a bounded prefix with `bodyTruncated: true`, while the successful settlement remains recorded.
 
 MagicBlock protected-balance functionality is isolated from third-party venues. It does not make Jupiter, Phoenix, GMTrade, or xStocks activity private; those transactions remain observable on Solana.
 

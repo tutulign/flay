@@ -131,6 +131,7 @@ export interface AgentX402Response {
   responseStatus: number;
   contentType: string;
   body: string;
+  bodyTruncated: boolean;
 }
 
 export interface AgentX402ExecutionResult {

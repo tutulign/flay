@@ -26,12 +26,13 @@ function headers(values: Record<string, string>): ReadonlyMap<string, string> {
   return new Map(Object.entries(values).map(([key, value]) => [key.toLowerCase(), value]));
 }
 
-function response(status: number, values: Record<string, string>, body = ''): X402HttpResponse {
+function response(status: number, values: Record<string, string>, body = '', bodyTruncated = false): X402HttpResponse {
   const responseHeaders = headers(values);
   return {
     status,
     headers: responseHeaders,
     body,
+    bodyTruncated,
     contentType: responseHeaders.get('content-type')?.split(';')[0] ?? '',
   };
 }
@@ -132,7 +133,7 @@ describe('Agent x402 exact-SVM payments', () => {
     expect(result).toMatchObject({
       signature: settlementSignature,
       status: 'confirmed',
-      response: { amountAtomic: '1', responseStatus: 200, contentType: 'application/json', body: '{"answer":42}' },
+      response: { amountAtomic: '1', responseStatus: 200, contentType: 'application/json', body: '{"answer":42}', bodyTruncated: false },
     });
     expect(transport.calls).toHaveLength(2);
     expect(transport.calls[1]).toMatchObject({ idempotencyKey, paymentSignature: expect.any(String) });
@@ -253,6 +254,45 @@ describe('Agent x402 exact-SVM payments', () => {
     }, randomUUID(), '10');
     await expect(service.execute(prepared.preparedId, wallet.publicKey.toBase58(), signPrepared(prepared.transaction, wallet)))
       .rejects.toMatchObject({ code: 'X402_SETTLEMENT_RECEIPT_MISSING' });
+  });
+
+  it('rejects an oversized challenge before signing but records a settled payment with a bounded response prefix', async () => {
+    const wallet = Keypair.generate();
+    const feePayer = Keypair.generate().publicKey;
+    const payTo = Keypair.generate().publicKey;
+    const required = challenge(feePayer.toBase58(), payTo.toBase58());
+    const builder = vi.fn(transactionBuilder(wallet, feePayer));
+    const oversizedChallenge = new AgentX402Service(new ScriptedTransport([
+      response(402, { 'payment-required': encodePaymentRequiredHeader(required) }, '{}', true),
+    ]), 'https://rpc.invalid', builder);
+    await expect(oversizedChallenge.prepare(wallet.publicKey.toBase58(), {
+      kind: 'x402', url: 'https://paid.example/report', method: 'GET', maxPaymentAtomic: '10',
+    }, randomUUID(), '10')).rejects.toMatchObject({ code: 'X402_CHALLENGE_TOO_LARGE' });
+    expect(builder).not.toHaveBeenCalled();
+
+    const settlementSignature = signature();
+    const settled = new AgentX402Service(new ScriptedTransport([
+      response(402, { 'payment-required': encodePaymentRequiredHeader(required) }),
+      response(200, {
+        'payment-response': encodePaymentResponseHeader({
+          success: true, payer: wallet.publicKey.toBase58(), transaction: settlementSignature,
+          network: X402_SOLANA_MAINNET, amount: '1',
+        }),
+        'content-type': 'application/json',
+      }, '{"boundedPrefix":', true),
+    ]), 'https://rpc.invalid', transactionBuilder(wallet, feePayer));
+    const prepared = await settled.prepare(wallet.publicKey.toBase58(), {
+      kind: 'x402', url: 'https://paid.example/report', method: 'GET', maxPaymentAtomic: '10',
+    }, randomUUID(), '10');
+    await expect(settled.execute(
+      prepared.preparedId,
+      wallet.publicKey.toBase58(),
+      signPrepared(prepared.transaction, wallet),
+    )).resolves.toMatchObject({
+      signature: settlementSignature,
+      status: 'confirmed',
+      response: { body: '{"boundedPrefix":', bodyTruncated: true },
+    });
   });
 
   it('fails closed on failed settlements and unsafe or malformed paid responses', async () => {

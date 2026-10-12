@@ -84,8 +84,12 @@ describe('x402 HTTPS boundary', () => {
     const redirect = scriptedTransport(302, { location: 'https://other.example/report' }, 'redirect');
     await expect(redirect.transport.request(input)).rejects.toMatchObject({ code: 'X402_REDIRECT_DENIED' });
 
-    const oversized = scriptedTransport(200, { 'content-type': 'text/plain' }, Buffer.alloc(64 * 1024 + 1));
-    await expect(oversized.transport.request(input)).rejects.toMatchObject({ code: 'X402_RESPONSE_TOO_LARGE' });
+    const oversized = scriptedTransport(200, { 'content-type': 'text/plain' }, Buffer.alloc(64 * 1024 + 1, 'a'));
+    await expect(oversized.transport.request(input)).resolves.toMatchObject({
+      status: 200,
+      body: 'a'.repeat(64 * 1024),
+      bodyTruncated: true,
+    });
 
     const sentHeaders = redirect.options()?.headers as Record<string, string>;
     expect(sentHeaders['payment-signature']).toBe('x402-payment');

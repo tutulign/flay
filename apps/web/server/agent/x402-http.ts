@@ -21,6 +21,7 @@ export interface X402HttpResponse {
   status: number;
   headers: ReadonlyMap<string, string>;
   body: string;
+  bodyTruncated: boolean;
   contentType: string;
 }
 
@@ -157,17 +158,7 @@ export class SafeX402HttpTransport implements X402HttpTransport {
         }
         const chunks: Buffer[] = [];
         let size = 0;
-        response.on('data', (chunk: Buffer | string) => {
-          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          size += bytes.length;
-          if (size > MAX_RESPONSE_BYTES) {
-            request.destroy();
-            fail(new AppError(502, 'X402_RESPONSE_TOO_LARGE', 'The x402 response exceeds 64 KiB.'));
-            return;
-          }
-          chunks.push(bytes);
-        });
-        response.on('end', () => {
+        const complete = (bodyTruncated: boolean) => {
           if (settled) return;
           settled = true;
           const responseHeaders = normalizedHeaders(response.headers);
@@ -175,9 +166,25 @@ export class SafeX402HttpTransport implements X402HttpTransport {
             status,
             headers: responseHeaders,
             body: Buffer.concat(chunks).toString('utf8'),
+            bodyTruncated,
             contentType: responseHeaders.get('content-type')?.split(';')[0].trim().toLowerCase() ?? '',
           });
+        };
+        response.on('data', (chunk: Buffer | string) => {
+          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          const remaining = MAX_RESPONSE_BYTES - size;
+          if (bytes.length > remaining) {
+            if (remaining > 0) chunks.push(bytes.subarray(0, remaining));
+            size = MAX_RESPONSE_BYTES;
+            complete(true);
+            response.destroy();
+            request.destroy();
+            return;
+          }
+          size += bytes.length;
+          chunks.push(bytes);
         });
+        response.on('end', () => complete(false));
         response.on('error', fail);
       });
       request.setTimeout(REQUEST_TIMEOUT_MS, () => request.destroy(new Error('timeout')));

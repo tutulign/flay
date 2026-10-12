@@ -665,3 +665,16 @@ A newly issued Full access capability reached `flay_request_x402`, but the first
 4. Production completes the single authorized $0.001 USDC request or returns a specific post-connect protocol/payment error with no duplicate settlement.
 
 Do not mark this repair complete until all four acceptance criteria are evidenced below.
+
+### Post-settlement accounting amendment
+
+The first live retry exposed a second boundary after the DNS repair: the provider settled the exact 1,000-atomic-USDC transaction successfully, then returned a body larger than Flay's 64 KiB release limit. The transport rejected while reading that body, so the Agent request incorrectly retained `execution: null` and `fundsMoved: false` even though Solana finalized the transfer. No retry is permitted until this is repaired.
+
+6. Change bounded HTTP reads to return a 64 KiB prefix plus an explicit truncation marker once response headers exist, closing the connection immediately without buffering the remaining body.
+7. Reject an oversized initial 402 challenge before any transaction is prepared. After a valid successful settlement receipt, record the confirmed payment even when the resource body is truncated; expose only the bounded prefix and mark it incomplete so agents cannot mistake it for the full payload.
+8. Add regression coverage for bounded transport truncation, oversized pre-payment challenge rejection, and truthful confirmed execution after an oversized paid response.
+
+Additional acceptance criteria:
+
+5. A confirmed settlement can never be reported as `fundsMoved: false` merely because the paid resource body exceeds Flay's release limit.
+6. Oversized content stays bounded to 64 KiB and is explicitly marked as truncated; an oversized 402 challenge still fails before signing or settlement.

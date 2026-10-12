@@ -255,6 +255,9 @@ export class AgentX402Service implements AgentX402Payments {
       body: requestBody,
       idempotencyKey,
     });
+    if (initial.bodyTruncated) {
+      throw new AppError(502, 'X402_CHALLENGE_TOO_LARGE', 'The x402 payment challenge exceeds 64 KiB.');
+    }
     if (initial.status !== 402) {
       throw new AppError(409, 'X402_PAYMENT_NOT_REQUIRED', initial.status >= 200 && initial.status < 300
         ? 'This resource completed without requesting an x402 payment.'
@@ -358,7 +361,7 @@ export class AgentX402Service implements AgentX402Payments {
     if (!/^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(settlement.transaction)) throw new AppError(502, 'X402_SETTLEMENT_SIGNATURE_INVALID', 'The x402 settlement receipt has an invalid Solana signature.');
     if (paid.status < 200 || paid.status >= 300) throw new AppError(502, 'X402_RESOURCE_FAILED', `The paid x402 resource returned HTTP ${paid.status}.`, paid.status >= 500);
     if (!contentTypeAllowed(paid.contentType, paid.body)) throw new AppError(502, 'X402_RESPONSE_TYPE_DENIED', 'Flay accepts only bounded JSON or plain-text x402 responses.');
-    if (paid.body && (paid.contentType === 'application/json' || paid.contentType.endsWith('+json'))) {
+    if (!paid.bodyTruncated && paid.body && (paid.contentType === 'application/json' || paid.contentType.endsWith('+json'))) {
       try { JSON.parse(paid.body); } catch {
         throw new AppError(502, 'X402_RESPONSE_JSON_INVALID', 'The paid x402 resource returned malformed JSON.');
       }
@@ -380,6 +383,7 @@ export class AgentX402Service implements AgentX402Payments {
         responseStatus: paid.status,
         contentType: paid.contentType || 'text/plain',
         body: paid.body,
+        bodyTruncated: paid.bodyTruncated,
       },
     };
     record.result = result;
