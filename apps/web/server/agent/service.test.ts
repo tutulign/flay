@@ -308,7 +308,14 @@ function automaticFuturesHarness(options: { position?: boolean; order?: boolean 
     review: { market: 'SOL-PERP', warnings: [] },
   };
   const futuresTransactions = {
-    prepare: vi.fn().mockImplementation(async (input: { action: string }) => ({ ...prepared, action: input.action })),
+    challengePhoenix: vi.fn().mockResolvedValue({
+      wallet: SOL_MINT,
+      challengeId: 'phoenix-challenge',
+      transaction: 'unsigned-phoenix-auth-transaction',
+      expiresAt: Date.now() + 60_000,
+    }),
+    loginPhoenix: vi.fn().mockResolvedValue({ wallet: SOL_MINT, authenticated: true, expiresAt: Date.now() + 60_000 }),
+    prepare: vi.fn().mockImplementation(async (input: { action: string; venue: 'phoenix' | 'gmtrade' }) => ({ ...prepared, action: input.action, venue: input.venue })),
     execute: vi.fn().mockResolvedValue({
       executionId: 'futures-execution', preparedId: 'futures-prepared', venue: 'phoenix', action: 'open',
       signature: 'futures-signature', status: 'submitted', explorerUrl: 'https://explorer.invalid/futures-signature',
@@ -382,9 +389,81 @@ describe('automatic Agent product execution', () => {
 
     expect(request).toMatchObject({ status: 'completed', execution: { signature: 'futures-signature', provider: 'phoenix' } });
     expect(futures.routeQuotes).toHaveBeenCalledTimes(1);
+    expect(futuresTransactions.loginPhoenix).toHaveBeenCalledWith(SOL_MINT);
+    expect(futuresTransactions.challengePhoenix).not.toHaveBeenCalled();
     expect(futuresTransactions.prepare).toHaveBeenCalledWith(expect.objectContaining({ action: 'open', venue: 'phoenix', quoteId: 'phoenix-route' }));
     expect(signer.signTransaction).toHaveBeenCalledTimes(1);
     expect(futuresTransactions.execute).toHaveBeenCalledWith('futures-prepared', SOL_MINT, 'signed-transaction', expect.stringMatching(/^agent-execute-/));
+  });
+
+  it('establishes an expired Phoenix API session with the delegated wallet before signing the order', async () => {
+    const { agents, created, signer, futuresTransactions } = automaticFuturesHarness();
+    vi.mocked(futuresTransactions.loginPhoenix)
+      .mockRejectedValueOnce(new AppError(409, 'PHOENIX_WALLET_PROOF_REQUIRED', 'Phoenix requires wallet proof.', true))
+      .mockResolvedValueOnce({ wallet: SOL_MINT, authenticated: true, expiresAt: Date.now() + 60_000 });
+
+    const request = await agents.submit(created.credential, {
+      idempotencyKey: crypto.randomUUID(),
+      intent: { kind: 'futures-open', market: 'SOL-PERP', side: 'short', orderType: 'market', collateralAtomic: '1000000', leverageBps: 30_000, slippageBps: 50, routeChoice: 'phoenix' },
+    });
+
+    expect(request).toMatchObject({ status: 'completed', execution: { provider: 'phoenix' } });
+    expect(futuresTransactions.challengePhoenix).toHaveBeenCalledWith(SOL_MINT);
+    expect(signer.signTransaction).toHaveBeenNthCalledWith(
+      1,
+      'delegated-wallet-id',
+      SOL_MINT,
+      'unsigned-phoenix-auth-transaction',
+      expect.stringMatching(/^agent-phoenix-auth-/),
+    );
+    expect(futuresTransactions.loginPhoenix).toHaveBeenNthCalledWith(1, SOL_MINT);
+    expect(futuresTransactions.loginPhoenix).toHaveBeenNthCalledWith(2, SOL_MINT, {
+      challengeId: 'phoenix-challenge',
+      signedTransaction: 'signed-transaction',
+    });
+    expect(signer.signTransaction).toHaveBeenNthCalledWith(
+      2,
+      'delegated-wallet-id',
+      SOL_MINT,
+      'unsigned-futures-transaction',
+      expect.stringMatching(/^agent-sign-/),
+    );
+  });
+
+  it('keeps the request pending when Phoenix session renewal is temporarily unavailable', async () => {
+    const { agents, created, signer, futuresTransactions } = automaticFuturesHarness();
+    vi.mocked(futuresTransactions.loginPhoenix)
+      .mockRejectedValueOnce(new AppError(409, 'PHOENIX_WALLET_PROOF_REQUIRED', 'Phoenix requires wallet proof.', true));
+    vi.mocked(futuresTransactions.challengePhoenix)
+      .mockRejectedValueOnce(new AppError(503, 'PHOENIX_CHALLENGE_FAILED', 'Phoenix authentication is recovering.', true));
+
+    const request = await agents.submit(created.credential, {
+      idempotencyKey: crypto.randomUUID(),
+      intent: { kind: 'futures-open', market: 'SOL-PERP', side: 'short', orderType: 'market', collateralAtomic: '1000000', leverageBps: 30_000, slippageBps: 50, routeChoice: 'phoenix' },
+    });
+
+    expect(request).toMatchObject({ status: 'pending', failure: 'Phoenix authentication is recovering.' });
+    expect(signer.signTransaction).not.toHaveBeenCalled();
+    expect(futuresTransactions.prepare).not.toHaveBeenCalled();
+    expect(futuresTransactions.execute).not.toHaveBeenCalled();
+  });
+
+  it('does not establish a Phoenix session for an explicit GMTrade route', async () => {
+    const { agents, created, futures, futuresTransactions } = automaticFuturesHarness();
+    vi.mocked(futures.routeQuotes).mockResolvedValue({
+      recommendedVenue: 'gmtrade',
+      quotes: [{ id: 'gmtrade-route', venue: 'gmtrade', market: 'SOL-PERP', executionEligible: true }],
+    } as never);
+
+    const request = await agents.submit(created.credential, {
+      idempotencyKey: crypto.randomUUID(),
+      intent: { kind: 'futures-open', market: 'SOL-PERP', side: 'short', orderType: 'market', collateralAtomic: '1000000', leverageBps: 30_000, slippageBps: 50, routeChoice: 'gmtrade' },
+    });
+
+    expect(request.status).toBe('completed');
+    expect(futuresTransactions.loginPhoenix).not.toHaveBeenCalled();
+    expect(futuresTransactions.challengePhoenix).not.toHaveBeenCalled();
+    expect(futuresTransactions.prepare).toHaveBeenCalledWith(expect.objectContaining({ venue: 'gmtrade', quoteId: 'gmtrade-route' }));
   });
 
   it('reserves an in-flight Futures open so concurrent agents cannot exceed the position cap', async () => {

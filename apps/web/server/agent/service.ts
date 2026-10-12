@@ -269,6 +269,7 @@ export class AgentService {
   private async runAutomaticExecution(credential: AgentCredentialRecord, requestId: string): Promise<AgentRequest> {
     const request = this.store.ownedRequest(credential.userId, credential.wallet, requestId);
     try {
+      const delegatedWalletId = this.store.delegatedWalletId(request);
       let action;
       if (request.status === 'prepared') {
         const existing = this.store.prepared(request);
@@ -279,11 +280,10 @@ export class AgentService {
         if (request.status !== 'pending') return this.store.request(request);
         const policy = this.store.requestPolicy(request);
         assertPolicyBasics(policy, request.intent);
-        action = await this.prepare(request, policy);
+        action = await this.prepare(request, policy, delegatedWalletId);
         this.store.markPrepared(request, action, true);
       }
 
-      const delegatedWalletId = this.store.delegatedWalletId(request);
       this.store.requestPolicy(request);
       let result;
       if (
@@ -364,7 +364,7 @@ export class AgentService {
     return 0n;
   }
 
-  private async prepare(request: AgentRequestRecord, policy: AgentPolicyInput) {
+  private async prepare(request: AgentRequestRecord, policy: AgentPolicyInput, delegatedWalletId?: string) {
     const intent = request.intent;
     if (intent.kind === 'convert') {
       const response = await this.quotes.quotes({
@@ -408,6 +408,9 @@ export class AgentService {
       const response = await this.futures.routeQuotes(routeIntent);
       const quote = this.selectFuturesQuote(response.quotes, response.recommendedVenue, intent.routeChoice);
       if (!quote?.executionEligible) throw new AppError(409, 'AGENT_NO_ROUTE', quote?.exclusionReason ?? 'No executable Futures route is currently available.', true);
+      if (quote.venue === 'phoenix' && delegatedWalletId) {
+        await this.ensureAutomaticPhoenixSession(request, delegatedWalletId);
+      }
       return {
         type: 'futures' as const,
         prepared: await this.futuresTransactions.prepare({
@@ -426,6 +429,9 @@ export class AgentService {
       ? venue.positions.some((position) => position.nativeId === intent.nativeId && position.market === intent.market)
       : venue.orders.some((order) => order.nativeId === intent.nativeId && order.market === intent.market);
     if (!exists) throw new AppError(409, 'AGENT_FUTURES_TARGET_MISSING', 'The requested Futures position or order is no longer active.', true);
+    if (intent.venue === 'phoenix' && delegatedWalletId) {
+      await this.ensureAutomaticPhoenixSession(request, delegatedWalletId);
+    }
     return {
       type: 'futures' as const,
       prepared: await this.futuresTransactions.prepare({
@@ -437,6 +443,30 @@ export class AgentService {
         idempotencyKey: request.id,
       }),
     };
+  }
+
+  private async ensureAutomaticPhoenixSession(request: AgentRequestRecord, delegatedWalletId: string): Promise<void> {
+    try {
+      await this.futuresTransactions.loginPhoenix(request.wallet);
+      return;
+    } catch (error) {
+      const appError = asAppError(error, 'PHOENIX_AUTH_UNAVAILABLE');
+      if (appError.code !== 'PHOENIX_WALLET_PROOF_REQUIRED') throw appError;
+    }
+
+    const challenge = await this.futuresTransactions.challengePhoenix(request.wallet);
+    this.store.requestPolicy(request);
+    const signedTransaction = await this.delegatedSigner.signTransaction(
+      delegatedWalletId,
+      request.wallet,
+      challenge.transaction,
+      `agent-phoenix-auth-${request.id}-${challenge.challengeId}`,
+    );
+    this.store.requestPolicy(request);
+    await this.futuresTransactions.loginPhoenix(request.wallet, {
+      challengeId: challenge.challengeId,
+      signedTransaction,
+    });
   }
 
   private selectFuturesQuote(quotes: FuturesRouteQuote[], recommended: 'phoenix' | 'gmtrade' | null, choice: 'auto' | 'phoenix' | 'gmtrade') {

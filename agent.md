@@ -1,5 +1,32 @@
 # Flay implementation record
 
+## Active plan: autonomous Phoenix session for Full access agents
+
+**Status:** in progress
+**Date:** 2026-10-12
+**Scope:** allow a policy-authorized Full access capability to establish Phoenix's short-lived API session through Flay's existing delegated Privy signer so Phoenix Futures actions can be prepared and executed without a browser login step
+
+### Implementation plan
+
+1. Before preparing an automatic Phoenix action, reuse a valid server session when one exists; otherwise obtain Phoenix's wallet challenge, use the credential's exact delegated Privy wallet to sign it, and submit the proof through the existing validated Phoenix login path.
+2. Apply automatic Phoenix authentication only after the capability, product, market, leverage, amount, route, and position guardrails pass. Keep Always ask and GMTrade behavior unchanged.
+3. Preserve all existing Phoenix challenge validation: exact wallet, fee payer, memo program, nonce, expiry, message bytes, and signature proof. Never expose the challenge signature, capability credential, Privy identity, or authorization key through MCP.
+4. Keep retries safe with challenge-specific Privy idempotency keys, reuse active sessions, and leave a request pending with an actionable retryable failure when Phoenix authentication or preparation is unavailable.
+5. Add focused tests for session reuse, delegated challenge signing and login, explicit Phoenix routing, automatic order signing, and provider failure behavior. Update the README to describe the Phoenix session behavior.
+6. Run the complete checks and release audit, deploy to Railway, create a fresh Full access capability after deployment, execute the wallet-owner-authorized 1 USDC / 3× SOL-PERP Phoenix short, verify its Solana signature and venue result, and compare the final system with every criterion below.
+
+### Acceptance criteria
+
+1. A Full access MCP request can establish Phoenix authentication using only the already delegated exact Privy wallet and does not require the user to open Flay for a separate Phoenix login.
+2. The login signature covers only Phoenix's strictly validated, expiring ownership challenge and cannot authorize a transfer, order, or arbitrary message.
+3. The requested Phoenix order remains bound to the immutable Agent guardrails and passes the existing quote, transaction-semantic, instruction-account, simulation, signer, and message-integrity checks before submission.
+4. Always ask still uses the user's browser session and signature; GMTrade does not perform Phoenix authentication; failure or revocation cannot fall through to execution.
+5. Tests, type checking, production build, release audit, secret scan, deployment health, live MCP status, and the authorized mainnet trade all pass before completion is declared.
+
+### Completion rule
+
+Do not declare this block complete until the deployed MCP completes the specified Phoenix trade or reports a truthful external provider/funding constraint after all Flay-controlled implementation work is finished. No automated test may submit a real transaction.
+
 ## Active plan: Privy TEE Full access provisioning
 
 **Status:** complete

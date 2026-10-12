@@ -68,7 +68,7 @@ The **Agent access** workspace lets a signed-in user create a narrow capability 
 Each capability has one immutable approval mode:
 
 - **Always ask:** Flay validates the intent and places it in the wallet's approval queue. The user opens the exact provider transaction, reviews its route and economic terms, and approves it with Privy. Ignored requests expire after 15 minutes.
-- **Automatic within guardrails (shown as Full access):** the user first approves Privy's one-time wallet delegation. Flay then resolves the route, validates and simulates the exact transaction, rechecks the capability, asks Privy's server wallet API to sign it, submits it through the existing provider path, and verifies the result. The user does not need to keep Flay open or approve each action.
+- **Automatic within guardrails (shown as Full access):** the user first approves Privy's one-time wallet delegation. Flay then resolves the route, validates and simulates the exact transaction, rechecks the capability, asks Privy's server wallet API to sign it, submits it through the existing provider path, and verifies the result. For Phoenix, Flay also signs the provider's strictly validated, expiring wallet-ownership challenge when its short-lived API session needs renewal. The user does not need to keep Flay open or approve each action.
 
 Automatic mode means full access only to the selected Convert, xStocks, and Futures actions within the configured token/market allowlists, per-request value, rolling daily value, slippage, leverage, open-position, expiry, and request-rate limits. It does not authorize fiat onramp, wallet send, key export, message signing, MagicBlock, arbitrary transactions, arbitrary programs, or policy changes. The owner can revoke an individual capability or revoke all automatic wallet access from the Agent workspace.
 
@@ -281,7 +281,7 @@ The health response reports sanitized readiness for Privy, RPC, swap providers, 
 - Flay currently targets Solana mainnet only.
 - Users choose explicit per-action approval or one-time delegated authorization for bounded Agent execution; confirmation and settlement still depend on Solana and the selected venue.
 - AI agents can submit only policy-approved trading intents. `Always ask` requires a human Privy signature for every value-changing action; automatic mode requires one-time wallet delegation and then signs only Flay-validated transactions within the owner's guardrails.
-- Phoenix execution requires wallet onboarding and collateral setup before it becomes eligible.
+- Phoenix execution requires one-time onchain wallet onboarding and collateral setup before it becomes eligible. Full access credentials renew Phoenix's short-lived API session with the delegated wallet after those prerequisites are complete.
 - GMTrade availability depends on the pinned sidecar and upstream GMTrade services.
 - xStocks are tokenized financial instruments, not direct equities. Availability and rights depend on the issuer and the user's jurisdiction.
 - Fiat purchases are completed by Privy's available payment provider and are subject to regional support, KYC, provider fees, and provider terms.
