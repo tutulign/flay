@@ -356,3 +356,32 @@ Do not mark this block complete until the deployed acceptance checks pass and a 
 5. **Production reproduction — pass.** Railway deployment `d2aef202-ceae-4503-915b-2df5fa8a6316` was uploaded from commit `b7910ef` and became healthy. The exact screenshot request (`500000` lamports SOL to USDC at 50 bps) returned HTTP 200 with executable Jupiter, Raydium, and Orca routes. Five subsequent quote-plus-health rounds for `500000` through `540000` lamports each returned quote HTTP 200, three routes, and health HTTP 200. Railway remained online and its post-deployment HTTP logs contained no responses at or above 400 during the verification window.
 
 All five implementation items and all five acceptance criteria are satisfied.
+
+## Active plan: Agent capability creation recovery
+
+**Status:** implementation in progress
+**Date:** 2026-10-12
+
+### Incident
+
+On mobile production, creating a `Full access` Agent capability remains on `Creating secure capability` indefinitely and never reveals the one-time bearer credential. The server is healthy and its Privy lookup confirms the affected embedded Solana wallet is still not delegated, so credential creation never completes. The client currently waits without a deadline on Privy's modal-based delegation hook before it calls `POST /api/agent/credentials`.
+
+### Implementation plan
+
+1. Replace the modal-based Privy delegation hook with Privy's documented headless delegation hook because Flay already presents the owner-controlled consent and guardrail UI.
+2. Represent delegation and credential creation as distinct UI states so the user can see which operation is running and cannot start a duplicate request.
+3. Bound the browser delegation wait. If Privy completes server-side but its browser promise does not settle, continue to the authoritative credential endpoint; if delegation is still absent, return an actionable retry message instead of spinning forever.
+4. Bound every server-side Privy user, wallet, signing, and sponsored-send call so provider degradation produces a retryable response rather than an indefinitely open Agent request.
+5. Add focused tests for completed, rejected, and timed-out browser delegation plus server-side Privy timeouts. Preserve the strict server delegation check before issuing a credential.
+6. Run the focused tests, full `npm run check`, release audit, and diff checks. Compare the final code against this plan, deploy the verified build, verify production health, and record the audit before declaring this block complete.
+
+### Acceptance criteria
+
+1. A successful Full access delegation proceeds to credential creation and displays the one-time capability.
+2. A stalled Privy browser promise cannot leave Flay spinning indefinitely; the server gets one chance to verify completed delegation and otherwise the UI returns to a retryable error state.
+3. Rejected or failed delegation never creates a credential.
+4. The server still issues automatic credentials only after Privy reports the exact authenticated embedded Solana wallet as delegated.
+5. Privy API stalls during credential verification or automatic execution terminate with bounded, retryable Agent errors.
+6. Always ask capability creation and all existing Agent authority restrictions remain unchanged.
+
+Do not mark this block complete until the deployed Full access creation path no longer spins indefinitely and the plan-versus-code audit is recorded below.

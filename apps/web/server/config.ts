@@ -39,6 +39,7 @@ export const config = {
   privyVerificationKey: clean(process.env.PRIVY_VERIFICATION_KEY)?.replace(/\\n/g, '\n'),
   privyAppSecret: clean(process.env.PRIVY_APP_SECRET),
   privyAuthorizationPrivateKey: clean(process.env.PRIVY_AUTHORIZATION_PRIVATE_KEY),
+  privyAgentTimeoutMs: boundedInteger(process.env.PRIVY_AGENT_TIMEOUT_MS, 15_000, 1_000, 60_000),
   privyFiatOnrampEnvironment: privyFiatOnrampEnvironment as 'sandbox' | 'production',
   jupiterApiKey: clean(process.env.JUPITER_API_KEY),
   jupiterBaseUrl: clean(process.env.JUPITER_BASE_URL) ?? 'https://api.jup.ag',

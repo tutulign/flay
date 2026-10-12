@@ -14,13 +14,16 @@ export interface AgentDelegatedSigner {
 export class PrivyAgentDelegatedSigner implements AgentDelegatedSigner {
   private readonly client: PrivyClient | null;
   private readonly authorizationPrivateKey: string | null;
+  private readonly requestTimeoutMs: number;
 
-  constructor(input: { appId?: string; appSecret?: string; authorizationPrivateKey?: string } = {
+  constructor(input: { appId?: string; appSecret?: string; authorizationPrivateKey?: string; requestTimeoutMs?: number } = {
     appId: config.privyAppId,
     appSecret: config.privyAppSecret,
     authorizationPrivateKey: config.privyAuthorizationPrivateKey,
+    requestTimeoutMs: config.privyAgentTimeoutMs,
   }) {
     this.authorizationPrivateKey = input.authorizationPrivateKey ?? null;
+    this.requestTimeoutMs = input.requestTimeoutMs ?? config.privyAgentTimeoutMs;
     this.client = input.appId && input.appSecret && input.authorizationPrivateKey
       ? new PrivyClient({ appId: input.appId, appSecret: input.appSecret })
       : null;
@@ -33,7 +36,11 @@ export class PrivyAgentDelegatedSigner implements AgentDelegatedSigner {
   async resolveWalletId(userId: string, wallet: string): Promise<string> {
     const client = this.requireClient();
     try {
-      const user = await client.users()._get(userId);
+      const user = await this.withTimeout(
+        client.users()._get(userId),
+        'AGENT_DELEGATION_LOOKUP_TIMEOUT',
+        'Privy took too long to verify this wallet delegation. Retry in a moment.',
+      );
       const account = user.linked_accounts.find((candidate) => (
         candidate.type === 'wallet'
         && candidate.chain_type === 'solana'
@@ -59,11 +66,15 @@ export class PrivyAgentDelegatedSigner implements AgentDelegatedSigner {
     const client = this.requireClient();
     await this.assertWallet(walletId, wallet);
     try {
-      const result = await client.wallets().solana().signTransaction(walletId, {
-        transaction,
-        idempotency_key: idempotencyKey,
-        authorization_context: { authorization_private_keys: [this.authorizationPrivateKey!] },
-      });
+      const result = await this.withTimeout(
+        client.wallets().solana().signTransaction(walletId, {
+          transaction,
+          idempotency_key: idempotencyKey,
+          authorization_context: { authorization_private_keys: [this.authorizationPrivateKey!] },
+        }),
+        'AGENT_PRIVY_SIGN_TIMEOUT',
+        'Privy took too long to sign this automatic transaction. Retry with the same request.',
+      );
       if (!result.signed_transaction) throw new AppError(502, 'AGENT_PRIVY_SIGNATURE_MISSING', 'Privy did not return the signed transaction.', true);
       return result.signed_transaction;
     } catch (error) {
@@ -77,13 +88,17 @@ export class PrivyAgentDelegatedSigner implements AgentDelegatedSigner {
     const client = this.requireClient();
     await this.assertWallet(walletId, wallet);
     try {
-      const result = await client.wallets().solana().signAndSendTransaction(walletId, {
-        transaction,
-        caip2: SOLANA_MAINNET_CAIP2,
-        sponsor: true,
-        idempotency_key: idempotencyKey,
-        authorization_context: { authorization_private_keys: [this.authorizationPrivateKey!] },
-      });
+      const result = await this.withTimeout(
+        client.wallets().solana().signAndSendTransaction(walletId, {
+          transaction,
+          caip2: SOLANA_MAINNET_CAIP2,
+          sponsor: true,
+          idempotency_key: idempotencyKey,
+          authorization_context: { authorization_private_keys: [this.authorizationPrivateKey!] },
+        }),
+        'AGENT_PRIVY_SEND_TIMEOUT',
+        'Privy took too long to submit this automatic transaction. Retry with the same request.',
+      );
       if (!result.hash) throw new AppError(502, 'AGENT_PRIVY_SIGNATURE_MISSING', 'Privy did not return the sponsored transaction signature.', true);
       return result.hash;
     } catch (error) {
@@ -103,13 +118,29 @@ export class PrivyAgentDelegatedSigner implements AgentDelegatedSigner {
   private async assertWallet(walletId: string, expectedAddress: string): Promise<void> {
     const client = this.requireClient();
     try {
-      const wallet = await client.wallets().get(walletId);
+      const wallet = await this.withTimeout(
+        client.wallets().get(walletId),
+        'AGENT_DELEGATED_WALLET_TIMEOUT',
+        'Privy took too long to verify the delegated wallet. Retry in a moment.',
+      );
       if (wallet.chain_type !== 'solana' || wallet.address !== expectedAddress) {
         throw new AppError(403, 'AGENT_DELEGATED_WALLET_MISMATCH', 'The delegated Privy wallet does not match this Agent capability.');
       }
     } catch (error) {
       if (error instanceof AppError) throw error;
       throw new AppError(502, 'AGENT_DELEGATED_WALLET_UNAVAILABLE', 'Privy could not verify the delegated wallet before signing.', true);
+    }
+  }
+
+  private async withTimeout<T>(operation: Promise<T>, code: string, message: string): Promise<T> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => reject(new AppError(504, code, message, true)), this.requestTimeoutMs);
+    });
+    try {
+      return await Promise.race([operation, deadline]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
   }
 }

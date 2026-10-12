@@ -1,4 +1,4 @@
-import { PrivyProvider, useDelegatedActions, useFiatOnramp, useIdentityToken, usePrivy } from '@privy-io/react-auth';
+import { PrivyProvider, useFiatOnramp, useHeadlessDelegatedActions, useIdentityToken, usePrivy } from '@privy-io/react-auth';
 import {
   useExportWallet,
   useFundWallet,
@@ -55,7 +55,7 @@ function PrivyBridge() {
   const { signAndSendTransaction } = useSignAndSendTransaction();
   const { fund } = useFiatOnramp();
   const { fundWallet } = useFundWallet();
-  const { delegateWallet, revokeWallets } = useDelegatedActions();
+  const { delegateWallet, revokeWallets } = useHeadlessDelegatedActions();
 
   const embeddedAccount = user?.linkedAccounts.find((account) => (
     account.type === 'wallet'

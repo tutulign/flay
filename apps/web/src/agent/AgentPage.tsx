@@ -31,7 +31,8 @@ import type {
 } from '../../shared/agent';
 import { CORE_TOKEN_MINTS } from '../../shared/constants';
 import type { FlayAuth } from '../auth';
-import { api, fromBase64, query, readableError, toBase64 } from '../lib/api';
+import { api, ApiClientError, fromBase64, query, readableError, toBase64 } from '../lib/api';
+import { waitForAgentDelegation } from './delegation';
 import './agent.css';
 
 interface AgentPageProps {
@@ -179,13 +180,18 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
   async function createCredential() {
     if (!auth.authenticated) { auth.login(); return; }
     if (!auth.walletAddress || !auth.identityToken) { setError('Your Privy wallet is still loading.'); return; }
-    setBusy('create'); setError(null); setCreated(null);
+    const needsDelegation = form.approvalMode === 'automatic' && !auth.walletDelegated;
+    let delegationNeedsVerification = false;
+    setBusy(needsDelegation ? 'delegate' : 'create'); setError(null); setCreated(null);
     try {
       if (form.approvalMode === 'automatic') {
         if (!workspace?.security.automaticExecutionConfigured) {
           throw new Error('Automatic execution is not configured on this Flay deployment. Choose Always ask.');
         }
-        if (!auth.walletDelegated) await auth.delegateWalletForAgent();
+        if (needsDelegation) {
+          delegationNeedsVerification = await waitForAgentDelegation(auth.delegateWalletForAgent()) === 'verification-needed';
+          setBusy('create');
+        }
       }
       const payload = {
         wallet: auth.walletAddress,
@@ -207,7 +213,11 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
       });
       setCreated(result); setCopied(false); await load(true);
     } catch (caught) {
-      setError(errorMessage(caught));
+      if (delegationNeedsVerification && caught instanceof ApiClientError && caught.code === 'AGENT_WALLET_NOT_DELEGATED') {
+        setError('Privy did not finish granting Full access. Retry once; Flay will never create the credential until Privy confirms this wallet delegation.');
+      } else {
+        setError(errorMessage(caught));
+      }
     } finally {
       setBusy(null);
     }
@@ -357,7 +367,7 @@ export default function AgentPage({ auth, onTransactionCompleted, onAutomaticTra
             <fieldset className="agent-fieldset"><legend>Allowed futures markets</legend><div className="agent-choice-row">{DEFAULT_MARKETS.map((market) => <button type="button" key={market} className={form.allowedFuturesMarkets.includes(market) ? 'selected' : ''} onClick={() => toggleMarket(market)}><span>{form.allowedFuturesMarkets.includes(market) && <Check size={12} />}</span>{market}</button>)}</div></fieldset>
             <div className="agent-field-grid"><label className="agent-field"><span>Maximum leverage</span><div className="agent-input-suffix"><input type="number" min="1" max="10" value={form.maxFuturesLeverage} onChange={(event) => setForm({ ...form, maxFuturesLeverage: event.target.value })} /><i>×</i></div></label><label className="agent-field"><span>Open position limit</span><input type="number" min="1" max="20" value={form.maxOpenFuturesPositions} onChange={(event) => setForm({ ...form, maxOpenFuturesPositions: event.target.value })} /></label></div>
           </>}
-          <button className="agent-primary" disabled={busy === 'create' || form.products.length === 0} onClick={() => void createCredential()}>{busy === 'create' ? <><LoaderCircle className="spin" size={16} /> Creating secure capability</> : <><KeyRound size={16} /> Create agent credential</>}</button>
+          <button className="agent-primary" disabled={Boolean(busy) || form.products.length === 0} onClick={() => void createCredential()}>{busy === 'delegate' ? <><LoaderCircle className="spin" size={16} /> Authorizing Full access</> : busy === 'create' ? <><LoaderCircle className="spin" size={16} /> Creating secure capability</> : <><KeyRound size={16} /> Create agent credential</>}</button>
           <p className="agent-card-note"><ShieldCheck size={14} /> Flay stores only a SHA-256 hash. The credential is shown once.</p>
         </section>
 

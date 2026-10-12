@@ -78,4 +78,14 @@ describe('Privy delegated Agent signer', () => {
   it('is unavailable without every server-only setting', () => {
     expect(new PrivyAgentDelegatedSigner({ appId: 'app', appSecret: 'secret' }).available()).toBe(false);
   });
+
+  it('bounds a stalled Privy delegation lookup with a retryable error', async () => {
+    mocks.getUser.mockReturnValueOnce(new Promise(() => undefined));
+    const signer = new PrivyAgentDelegatedSigner({
+      appId: 'app', appSecret: 'secret', authorizationPrivateKey: 'private-key', requestTimeoutMs: 5,
+    });
+    await expect(signer.resolveWalletId('did:privy:user', SOL_MINT)).rejects.toMatchObject({
+      code: 'AGENT_DELEGATION_LOOKUP_TIMEOUT', status: 504, retryable: true,
+    });
+  });
 });

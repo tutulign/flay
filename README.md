@@ -202,6 +202,7 @@ Copy [`apps/web/.env.example`](apps/web/.env.example) to `apps/web/.env`. The re
 | `PRIVY_VERIFICATION_KEY` | Yes | Server-only Privy identity-token verification key |
 | `PRIVY_APP_SECRET` | Automatic agents only | Server-only Privy application secret used to resolve delegated wallets |
 | `PRIVY_AUTHORIZATION_PRIVATE_KEY` | Automatic agents only | Base64 PKCS8 P-256 private authorization key; never use a wallet private key or a `VITE_` variable |
+| `PRIVY_AGENT_TIMEOUT_MS` | No | Maximum wait for each server-side Privy Agent operation; defaults to 15 seconds |
 | `SOLANA_RPC_URL` | Yes | Primary Solana mainnet RPC |
 | `SOLANA_FALLBACK_RPC_URL` | No | Optional independent RPC fallback |
 | `SOLANA_RPC_MAX_RPS` / `SOLANA_RPC_MAX_CONCURRENCY` / `SOLANA_RPC_QUEUE_TIMEOUT_MS` | No | Shared server RPC budget; defaults to 8 requests/second, 4 concurrent requests, and a 10-second queue timeout |
