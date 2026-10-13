@@ -702,3 +702,42 @@ That live request ran before the settlement-accounting deployment and exposed th
 #### Final post-fix production acceptance
 
 The owner explicitly authorized one additional 0.001 USDC payment and supplied a replacement Full access capability. Production request `9593148f-202f-4945-9597-adab360dab4c` completed through MCP with `failure: null`, `fundsMoved: true`, `humanApprovalRequired: false`, HTTP 200, `bodyTruncated: true`, and the bounded 64 KiB JSON prefix. Solana independently reports transaction `3t6o8idy6TmBGKppFYSVtbyueRXtJN1fwkyfrVPusbJEMj3zuAKEnTGEnYkmaF9k2DAqYmNLLtnVA47DfksnuJCy` finalized without error at slot `456232686`. Its decoded instruction is exactly one `transferChecked` from the capability wallet for canonical mainnet USDC, amount `1000`, decimals `6`; the facilitator paid the 10,001-lamport network fee. This satisfies implementation item 5, original acceptance criterion 4, and both post-settlement acceptance criteria. All implementation items and acceptance criteria in this repair plan are now evidenced and complete.
+
+## Active plan: Human-and-agent README refresh
+
+**Status:** complete
+**Date:** 2026-10-13
+
+### Objective
+
+Update the public README so Flay is presented accurately as a self-custodial Solana exchange for both people and AI agents, with agent capabilities described from the implemented code and current primary documentation rather than as a future concept.
+
+### Implementation plan
+
+1. Audit the existing README against the implemented MCP tools, capability policies, approval modes, Privy wallet delegation, execution records, and x402 payment boundary.
+2. Research current official MCP, Privy delegated-wallet, and x402 terminology and link readers to the relevant primary documentation.
+3. Rewrite the README opening and agent sections around the product hook: one account for human-directed trading and policy-controlled agent execution, while keeping every custody, gas, venue, privacy, and availability claim precise.
+4. Add a concise agent connection example and clarify what agents can do, what they can never access, and how `Always ask` differs from automatic execution within guardrails.
+5. Run README link/content checks plus the repository-required `npm run check`, `npm run release:audit`, and `git diff --check`.
+6. Compare the final README with this plan, record the completion audit, commit only the documentation work, and push it to the tracked GitHub branch.
+
+### Acceptance criteria
+
+1. The first screen identifies Flay as built for humans and AI agents and explains the shared-wallet, user-controlled policy model without suggesting that an agent receives a private key.
+2. All claimed products, tools, approval modes, payment behavior, and safety limits are evidenced by the current codebase.
+3. Gas sponsorship and decentralization are described conditionally and accurately; the README does not claim every action is gasless or private.
+4. An MCP-compatible agent can identify the production endpoint, authentication format, discovery/status tools, and the behavior of each approval mode from the README.
+5. Required repository checks pass, unrelated working-tree changes remain out of the documentation commit, and the commit is pushed successfully.
+
+Do not mark this documentation block complete until every criterion is checked against the final README and the pushed commit is verified.
+
+### Plan-versus-README completion audit
+
+1. **Human-and-agent positioning — pass.** The first screen now identifies Flay as a self-custodial Solana exchange for people and AI agents, leads with `One wallet. Every market. Human control. Agent speed.`, and explains that an agent receives an expiring policy-bound capability rather than the wallet private key, export, raw signer, or arbitrary transaction access.
+2. **Implemented behavior only — pass.** The final README was compared with `server/agent/mcp.ts`, the Agent policy schemas, store, service, delegated signer, x402 service, API routes, and Agent workspace. Its table includes all 11 registered MCP tools and no nonexistent tool. The documented products, approval modes, credential hashing, expiry, wallet binding, lifecycle/status evidence, revocation, idempotency, and automatic Phoenix session renewal are implemented in the current codebase.
+3. **Current primary terminology — pass.** The README links the official 2026-07-28 MCP Streamable HTTP transport specification, Privy's current wallet-signer provisioning documentation, and the x402 Foundation's v2 and exact-SVM specifications. Each link and the live application returned HTTP 200 during verification.
+4. **Accurate product boundaries — pass.** The README explicitly makes gas sponsorship conditional, describes Flay as a public mainnet beta, limits Full access to the owner's selected products and guardrails, and preserves the existing disclosures for provider availability, fiat regions, tokenized-stock rights, public Solana activity, MagicBlock privacy, network fees, and venue setup costs.
+5. **Agent connection path — pass.** A five-step setup explains policy creation, approval-mode selection, one-time credential handling, secret storage, the production MCP endpoint, bearer authentication, and the required first `flay_get_capability` call. The existing REST example, MCP client example, tool authority table, and request-status guidance remain intact.
+6. **Verification and push — pass.** `npm run check` passed the production TypeScript/Vite build and complete Vitest suite. `npm run release:audit` passed all 246 browser bundle files, `git diff --check` passed, every relative Markdown link resolved, and source-to-README tool comparison found no missing or unknown tools. README commit `aea9f7e` contains only `README.md` and was pushed to `origin/main` at `https://github.com/tutulign/flay`. Unrelated local Convert implementation changes were not staged or committed.
+
+All six implementation-plan items and all five acceptance criteria are satisfied. The researched human-and-agent README is live on the tracked GitHub branch.
