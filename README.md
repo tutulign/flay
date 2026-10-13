@@ -1,10 +1,25 @@
 # Flay
 
-Flay is a self-custodial Solana trading application that combines a familiar exchange experience with onchain execution. Users sign in with email or Google, receive an exportable Privy embedded wallet, and access aggregated swaps, limit orders, perpetual futures, tokenized stocks, fiat funding, and eligible gasless transactions from one interface.
+> **One wallet. Every market. Human control. Agent speed.**
 
-**Live application:** [flay-production.up.railway.app](https://flay-production.up.railway.app)
+Flay is a self-custodial Solana exchange built for people and AI agents. People can swap tokens, place limit orders, trade perpetuals, buy tokenized stocks, and fund their wallet with crypto or fiat from one CEX-like interface. A trusted AI agent can use the same wallet through a policy-bound capability—without receiving the wallet's private key.
 
-Flay is a public beta running on Solana mainnet. It does not custody user assets, operate a trading venue, deploy a custom Solana program, or charge an application fee.
+The wallet owner chooses how every agent acts: **Always ask** queues each action for human review and a Privy signature, while **Full access** executes automatically only inside the owner's product, asset, market, value, slippage, leverage, origin, and expiry guardrails.
+
+**[Open Flay](https://flay-production.up.railway.app)** · **[Connect an MCP agent](#model-context-protocol)** · **[Review the security model](#trust-and-security-model)**
+
+Flay is a public beta on Solana mainnet. It does not custody user assets, give agents unrestricted wallet access, operate a trading venue, deploy a custom Solana program, or charge an application fee. Gas sponsorship is available only for eligible actions.
+
+## One account, two ways to act
+
+| Human | AI agent |
+| --- | --- |
+| Sign in with email or Google and use an exportable Privy embedded wallet | Connect through framework-neutral MCP or REST with an expiring bearer capability |
+| Review and sign trades directly in Flay | Discover supported assets and submit structured Convert, xStocks, Futures, or x402 intents |
+| Choose the route, venue, fees, and risk shown before signing | Operate in `Always ask` or automatic mode under the immutable limits selected at creation |
+| Revoke credentials or all automatic wallet access from the Agent workspace | Read only its own policy, requests, failures, transaction evidence, and confirmation status |
+
+Both paths use the owner's wallet and Flay's validated provider integrations. The agent receives a capability, never the private key, wallet export, raw signer, or arbitrary transaction access.
 
 ## Features
 
@@ -16,7 +31,7 @@ Flay is a public beta running on Solana mainnet. It does not custody user assets
 | Futures | Unified Phoenix and GMTrade markets, route comparison, reference candles, collateral controls, order review, positions, and recovery states |
 | Stocks | Official xStocks Solana catalog, Token-2022 scaled-share accounting, issuer reference data, and Jupiter execution |
 | Funds | Privy Card Onramps, wallet receive address, and a bounded USDC transfer flow |
-| AI agent access | Framework-neutral MCP and REST access with wallet-bound capabilities, product/origin allowlists, spending limits, and owner-selected `Always ask` or delegated automatic execution |
+| Human and agent access | Direct human execution plus framework-neutral MCP and REST access with wallet-bound capabilities, product/origin allowlists, spending limits, and owner-selected `Always ask` or delegated automatic execution |
 | Agent payments | x402 v2 exact payments for allowlisted HTTPS APIs using canonical USDC on Solana mainnet, with facilitator-sponsored network fees |
 | Gas sponsorship | Jupiter-managed sponsorship for eligible Jupiter swaps and Privy-managed sponsorship for eligible reviewed SPL swaps and USDC sends |
 | Activity | Wallet-bound transaction history and links to confirmed Solana transactions |
@@ -27,15 +42,16 @@ Provider eligibility is checked for every action. A route can be unavailable bec
 
 ```mermaid
 flowchart LR
-    U[User] --> P[Privy authentication and wallet]
+    U[Wallet owner] --> P[Privy authentication and wallet]
+    U -->|Creates policy and capability| AI[Agent policy and execution controller]
     P --> W[React application]
-    W --> A[Flay Express API]
+    W -->|Human action| A[Flay Express API]
+    M[MCP-compatible AI agent] -->|Bearer capability + structured intent| AI
+    AI -->|Validated intent| A
     A --> C[Jupiter / Raydium / Orca]
     A --> F[Phoenix]
     A --> G[GMTrade Rust adapter]
     A --> X[xStocks]
-    A --> AI[Agent policy and execution controller]
-    M[Any MCP-compatible agent] -->|Streamable HTTP + capability| AI
     AI -->|x402 v2 exact USDC| Q[Paid APIs]
     A --> R[Solana RPC]
     C --> S[Solana mainnet]
@@ -45,7 +61,7 @@ flowchart LR
     AI -->|Validated delegated signing| P
 ```
 
-The server requests quotes, normalizes venue responses, builds transactions, validates their structure, and simulates the exact transaction where required. In `Always ask`, the browser presents the provider, output, minimum received, fees, sponsorship status, and warnings before the user signs. In automatic mode, the user grants Privy wallet delegation once and Flay signs only the exact validated transactions allowed by that capability's guardrails.
+The server requests quotes, normalizes venue responses, builds transactions, validates their structure, and simulates the exact transaction where required. Human actions and agent actions use the same execution pipeline. In `Always ask`, the browser presents the provider, output, minimum received, fees, sponsorship status, and warnings before the owner signs. In automatic mode, the owner provisions a [Privy wallet signer](https://docs.privy.io/wallets/using-wallets/signers/delegate-wallet) once and Flay signs only the exact validated transactions permitted by that capability's guardrails.
 
 Futures candles are stable reference data rendered with TradingView Lightweight Charts. They are not presented as a venue's exact execution price. Phoenix and GMTrade retain their own collateral, funding, liquidation, and position models.
 
@@ -66,12 +82,20 @@ MagicBlock protected-balance functionality is isolated from third-party venues. 
 
 ## AI agent access
 
-The **Agent access** workspace lets a signed-in user create a narrow capability for an external AI agent. The policy selects Convert, xStocks, Futures, and/or x402 API payments, then limits tokens, markets, HTTPS origins, methods, value per request, rolling 24-hour value, slippage, leverage, open positions, and credential lifetime.
+The **Agent access** workspace lets a signed-in owner create a narrow, expiring capability for any MCP-compatible or REST-capable AI agent. Flay is not tied to one agent framework. The owner selects Convert, xStocks, Futures, and/or x402 API payments, then limits tokens, markets, HTTPS origins, methods, value per request, rolling 24-hour value, slippage, leverage, open positions, and credential lifetime. Flay applies additional fixed request-rate limits at the API boundary.
+
+To connect an agent:
+
+1. Sign in to Flay and open **Agent access**.
+2. Select the products and guardrails the agent may use.
+3. Choose **Always ask** or **Full access**. Full access requires a one-time Privy wallet-signer consent.
+4. Create the capability and copy its bearer credential when it is shown. Flay stores only its SHA-256 hash and cannot display the credential again.
+5. Store the credential in the agent's secret store, connect it to the MCP endpoint below, and call `flay_get_capability` before submitting an action.
 
 Each capability has one immutable approval mode:
 
 - **Always ask:** Flay validates the intent and places it in the wallet's approval queue. The user opens the exact provider transaction, reviews its route and economic terms, and approves it with Privy. Ignored requests expire after 15 minutes.
-- **Automatic within guardrails (shown as Full access):** the user first approves Privy's one-time wallet delegation. Flay then resolves the route, validates and simulates the exact transaction, rechecks the capability, asks Privy's server wallet API to sign it, submits it through the existing provider path, and verifies the result. For Phoenix, Flay also signs the provider's strictly validated, expiring wallet-ownership challenge when its short-lived API session needs renewal. The user does not need to keep Flay open or approve each action.
+- **Automatic within guardrails (shown as Full access):** the owner first approves Privy's one-time wallet-signer provisioning. Flay then resolves the route, validates and simulates the exact transaction, rechecks the capability, asks Privy's server wallet API to sign it, submits it through the existing provider path, and verifies the result. For Phoenix, Flay also signs the provider's strictly validated, expiring wallet-ownership challenge when its short-lived API session needs renewal. The owner does not need to keep Flay open or approve each action.
 
 Automatic mode means full access only to the selected Convert, xStocks, Futures, and x402 actions within the configured token, market, origin, method, per-request value, rolling daily value, slippage, leverage, open-position, expiry, and request-rate limits. It does not authorize fiat onramp, wallet send, key export, general message signing, MagicBlock, arbitrary transactions, arbitrary programs, or policy changes. The owner can revoke an individual capability or revoke all automatic wallet access from the Agent workspace.
 
@@ -127,7 +151,7 @@ Flay exposes a framework-neutral MCP server at:
 https://flay-production.up.railway.app/api/mcp
 ```
 
-The transport is Streamable HTTP. Every protocol request, including initialization and tool discovery, requires `Authorization: Bearer <capability>`. Keep the one-time capability in the client's secret store or process environment; never put it in an agent prompt or commit it to configuration. The server is stateless per request, returns JSON responses, limits request bodies and request rates, validates same-origin browser calls, and rechecks expiry or revocation before every operation.
+The transport follows the official [MCP Streamable HTTP specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports). Every protocol request, including initialization and tool discovery, requires `Authorization: Bearer <capability>`. Keep the one-time capability in the client's secret store or process environment; never put it in an agent prompt or commit it to configuration. The server is stateless per request, returns JSON responses, limits request bodies and request rates, validates same-origin browser calls, and rechecks expiry or revocation before every operation.
 
 This example uses the official TypeScript MCP client, but the endpoint works with any conforming client:
 
